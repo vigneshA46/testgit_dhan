@@ -1,0 +1,33 @@
+# -------- Core --------
+python-dotenv
+requests
+pytz
+pyotp
+dhanhq
+dotenv
+psycopg2-binary
+
+# -------- Dhan API / WebSocket --------
+websocket-client
+
+# -------- Data Processing --------
+pandas
+numpy
+
+# -------- Async / Performance --------
+aiohttp
+
+# -------- State / Cache (optional but recommended) --------
+redis
+
+# -------- Logging --------
+loguru
+
+# -------- Date & Time Utilities --------
+python-dateutil
+
+# -------- Serialization --------
+orjson
+
+# -------- Development / Debug --------
+tqdm
