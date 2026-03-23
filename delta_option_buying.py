@@ -351,6 +351,36 @@ logtradeleg(
 )
 
 
+def get_first_candle_mark(security_id):
+
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+   
+
+    idx= dhan.intraday_minute_data(
+        security_id=security_id,
+        exchange_segment="NSE_FNO",
+        instrument_type="OPTIDX",
+        from_date=today,
+        to_date=today
+    )
+    print("Today :",type(today),today)
+
+    data = idx.get("data", {})
+    closes = data.get("close", [])
+    timestamps = data.get("timestamp", [])
+
+    for i in range(len(timestamps)):
+        ts = datetime.fromtimestamp(timestamps[i], IST)  
+
+        if ts.hour == 9 and ts.minute == 15:
+            mark = float(closes[i])
+            print(f"📍 HIST MARK {security_id} @ {mark}")
+            return mark
+
+    print("❌ 09:15 candle not found")
+    return None
+
+
 # =========================
 # STATE
 # =========================
