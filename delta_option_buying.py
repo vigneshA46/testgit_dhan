@@ -725,7 +725,7 @@ for t in TOKENS:
     subscribe(t, on_tick)
  """
 
-feed = marketfeed.DhanFeed(CLIENT_ID, ACCESS_TOKEN, instruments, "v2")
+feed = marketfeed.DhanFeed(CLIENT_ID, access_token, instruments, "v2")
  
 while True:
     try:
