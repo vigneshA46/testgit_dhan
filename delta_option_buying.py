@@ -310,10 +310,8 @@ ce_strike, pe_strike = get_high_delta_strikes(access_token, CLIENT_ID)
 CE_STRIKE = int(ce_strike)
 PE_STRIKE = int(pe_strike)
 
-print(CE_TOKEN)
-print(PE_TOKEN)
-
-
+print(CE_STRIKE)
+print(PE_STRIKE)
 
 # =========================
 # OPTION SELECTION
