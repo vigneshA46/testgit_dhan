@@ -97,6 +97,9 @@ stop_trading = False
 allow_ce = True
 allow_pe = True
 
+ce_running_pnl = 0
+pe_running_pnl = 0
+
 
 telemetry = {
     "strategy_id": COMMON_ID,
@@ -315,8 +318,8 @@ def mark_range():
     logtradeleg(
         COMMON_ID,
         "CE",
-        f"NIFTY CE {ATM}",
-        ATM,
+        f"NIFTY CE {ce_strike}",
+        ce_strike,
         str(today)
     )
 
@@ -324,8 +327,8 @@ def mark_range():
     logtradeleg(
         COMMON_ID,
         "PE",
-        f"NIFTY PE {ATM}",
-        ATM,
+        f"NIFTY PE {pe_strike}",
+        pe_strike,
         str(today)
     )   
 
@@ -466,20 +469,23 @@ def exit_position(side, price, t, reason):
 
 
 def on_tick_index(msg):
-    idx_builder.process_tick(msg, on_index_candle)
+    idx_builder.process_tick(msg)
 
 
 def on_tick_option(msg):
-    global ce_pos, pe_pos, pending_ce, pending_pe, last_ce_ltp, last_pe_ltp
+
+    global ce_pos, pe_pos, pending_ce, pending_pe, last_ce_ltp, last_pe_ltp, ce_running_pnl, pe_running_pnl
     
 
     token = msg["security_id"]
     ltp = msg.get("LTP")
     t = datetime.now(IST)
     if token == CE_ID:
+        print("CE tick",msg)
         last_ce_ltp = ltp
         telemetry["ce_ltp"] = ltp
     if token == PE_ID:
+        print("PE tick",msg)
         last_pe_ltp = ltp
         telemetry["pe_ltp"] = ltp
 
@@ -549,7 +555,7 @@ def on_tick_option(msg):
 
 
     # still keep candle builder
-    opt_builder.process_tick(msg, on_option_candle)
+    opt_builder.process_tick(msg)
 
 
 
@@ -566,9 +572,9 @@ if __name__ == "__main__":
     mark_range()
 
     instruments = [
-        (marketfeed.NSE, INDEX_TOKEN),
-        (marketfeed.NSE_FNO, CE_ID),
-        (marketfeed.NSE_FNO, PE_ID)
+        (marketfeed.NSE, INDEX_TOKEN, marketfeed.Quote),
+        (marketfeed.NSE_FNO, CE_ID,marketfeed.Quote),
+        (marketfeed.NSE_FNO, PE_ID , marketfeed.Quote)
     ]
 
     feed = marketfeed.DhanFeed(CLIENT_ID, ACCESS_TOKEN, instruments, "v2")
@@ -580,13 +586,14 @@ if __name__ == "__main__":
 
             feed.run_forever()
             msg = feed.get_data()
+         
 
             if msg:
 
                 if msg["security_id"] == INDEX_TOKEN:
                     on_tick_index(msg)
 
-                elif msg["security_id"] in (CE_ID, PE_ID):
+                elif msg["security_id"] in (int(CE_ID),int(PE_ID)):
                     on_tick_option(msg)
         except Exception as e:
             print("WS ERROR:", e)
