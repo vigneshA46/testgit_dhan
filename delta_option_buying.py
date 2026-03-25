@@ -433,7 +433,7 @@ def handle_leg(name, token, candle, state, ltp):
                 price=exit_price,
                 reason="TIME EXIT",
                 pnl= state["pnl"],
-                cum_pnl=pnl
+                cum_pnl=combined_pnl
                 )
 
             state["position"] = False
@@ -483,7 +483,7 @@ def handle_leg(name, token, candle, state, ltp):
                 price=entry_price,
                 reason="Trade opened",
                 pnl= state["pnl"],
-                cum_pnl= pnl
+                cum_pnl= combined_pnl
                 )
 
             log_event(f"{name} BUY", token, "ENTRY_EXECUTED", entry_price, "Trade opened")
@@ -523,7 +523,7 @@ def handle_leg(name, token, candle, state, ltp):
                 price=exit_price,
                 reason="TSL HIT",
                 pnl=state["pnl"],
-                cum_pnl=pnl
+                cum_pnl=combined_pnl
             )
 
             state["position"] = False
@@ -556,7 +556,7 @@ def handle_leg(name, token, candle, state, ltp):
             price=exit_price,
             reason="Below Mark",
             pnl=state["pnl"],
-            cum_pnl=pnl
+            cum_pnl=combined_pnl
                 )
 
         state["position"] = False
@@ -566,7 +566,7 @@ def handle_leg(name, token, candle, state, ltp):
 
 def universal_exit_check(ce_ltp, pe_ltp):
 
-    global combined_pnl
+    global combined_pnl , pnl
 
     ce_running = 0
     pe_running = 0
@@ -578,6 +578,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
         pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
 
     total = ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running
+    combined_pnl = total
 
     if total >= TARGET_POINTS*65:
 
@@ -600,7 +601,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 price=exit_price,
                 reason="UNIVERSAL EXIT",
                 pnl= ce_state["pnl"],
-                cum_pnl=pnl
+                cum_pnl=combined_pnl
                 )   
 
             ce_state["position"] = False
@@ -622,7 +623,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 price=exit_price,
                 reason="UNIVERSAL EXIT",
                 pnl=pe_state["pnl"],
-                cum_pnl=pnl
+                cum_pnl=combined_pnl
                 )
 
             pe_state["position"] = False
