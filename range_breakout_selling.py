@@ -482,7 +482,7 @@ def on_tick_option(msg):
     global ce_pos, pe_pos, pending_ce, pending_pe, last_ce_ltp, last_pe_ltp, ce_running_pnl, pe_running_pnl
     
 
-    token = msg["security_id"]
+    token = str(msg["security_id"])
     ltp = msg.get("LTP")
     t = datetime.now(IST)
     if token == CE_ID:
