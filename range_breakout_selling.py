@@ -257,7 +257,7 @@ def calculate_atm(price, step=50):
     return int(round(price / step) * step)
 
 def mark_range():
-    global top_line, bottom_line, CE_ID, PE_ID, ce_strike, pe_strike,today
+    global top_line, bottom_line, CE_ID, PE_ID, ce_strike, pe_strike,today,ATM
 
     #today = datetime.now(IST).strftime("%Y-%m-%d")
     idx = dhan.intraday_minute_data(
@@ -351,7 +351,7 @@ def mark_range():
 # =========================
 
 def on_index_candle(token, t, row):
-    global pending_ce, pending_pe, stop_trading
+    global pending_ce, pending_pe, stop_trading,allow_ce,allow_pe
 
     if stop_trading:
         return
@@ -439,7 +439,7 @@ def exit_position(side, price, t, reason):
         event_type="EXIT",
         leg_name=side,
         token=CE_ID if side == "CE" else PE_ID,
-        symbol=CE_SYMBOL if side == "CE" else PE_SYMBOL,
+        symbol=SYMBOL if side == "CE" else SYMBOL,
         side="BUY",  # exit of SELL = BUY
         lot=LOT,
         price=price,
@@ -469,7 +469,12 @@ def exit_position(side, price, t, reason):
 
 
 def on_tick_index(msg):
-    idx_builder.process_tick(msg)
+    candle= idx_builder.process_tick(msg)
+
+    if candle:
+        print("INDEX CANDLE:", candle)
+        t = candle["time"]
+        on_index_candle(msg["security_id"], t, candle)
 
 
 def on_tick_option(msg):
