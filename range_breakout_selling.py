@@ -469,8 +469,12 @@ def exit_position(side, price, t, reason):
 
 
 def on_tick_index(msg):
-    idx_builder.process_tick(msg)
+    candle= idx_builder.process_tick(msg)
 
+    if candle:
+        print("INDEX CANDLE:", candle)
+        t = candle["time"]
+        on_index_candle(msg["security_id"], t, candle)
 
 
 def on_tick_option(msg):
@@ -591,7 +595,7 @@ if __name__ == "__main__":
 
             if msg:
 
-                if msg["security_id"] == INDEX_TOKEN:
+                if msg["security_id"] == int(INDEX_TOKEN):
                     on_tick_index(msg)
 
                 elif msg["security_id"] in (int(CE_ID),int(PE_ID)):
