@@ -585,11 +585,11 @@ if __name__ == "__main__":
     feed = marketfeed.DhanFeed(CLIENT_ID, ACCESS_TOKEN, instruments, "v2")
 
     print("\n🚀 Range Breakout Paper Engine Running...\n")
+    
+    feed.run_forever()
 
     while True:
         try:
-
-            feed.run_forever()
             msg = feed.get_data()
          
 
