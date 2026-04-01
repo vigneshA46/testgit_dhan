@@ -37,6 +37,7 @@ EVENT_LOG_URL = "https://dreaminalgo-backend-production.up.railway.app/api/paper
 
 COMMON_ID = "bbfe888c-60f9-4968-acf1-2320ce69ce8d"
 SYMBOL = "NIFTY"
+symbol=SYMBOL
 
 load_dotenv()
 
@@ -56,8 +57,8 @@ DAY_TARGET = -38
 LOT = 1
 LOTSIZE= 65
 
-today = datetime.now(IST).strftime("%Y-%m-%d")
-""" today = "2024-09-11" """
+#today = datetime.now(IST).strftime("%Y-%m-%d")
+today = "2024-09-11"
 
 # =========================
 # LOGIN
@@ -71,7 +72,7 @@ fno_df = load_fno_master()
 
 
 idx_builder = OneMinuteCandleBuilder()
-opt_builder = OneMinuteCandleBuilder()
+#opt_builder = OneMinuteCandleBuilder()
 
 # =========================
 # STATE
@@ -96,9 +97,6 @@ stop_trading = False
 
 allow_ce = True
 allow_pe = True
-
-ce_running_pnl = 0
-pe_running_pnl = 0
 
 
 telemetry = {
@@ -154,7 +152,7 @@ t.start()
 
 
 
-def logtradeleg(strategyid, leg, symbol, strike_price, date):
+def logtradeleg(strategyid, leg, symbol, strike_price, date, token):
     url = "https://dreaminalgo-backend-production.up.railway.app/api/tradelegs/create"
     
     payload = {
@@ -162,7 +160,8 @@ def logtradeleg(strategyid, leg, symbol, strike_price, date):
         "leg": leg,
         "symbol": symbol,
         "strike_price": strike_price,
-        "date": date
+        "date": date,
+        "token": token
     }
 
     try:
@@ -257,7 +256,7 @@ def calculate_atm(price, step=50):
     return int(round(price / step) * step)
 
 def mark_range():
-    global top_line, bottom_line, CE_ID, PE_ID, ce_strike, pe_strike,today,ATM
+    global top_line, bottom_line, CE_ID, PE_ID, ce_strike, pe_strike,today
 
     #today = datetime.now(IST).strftime("%Y-%m-%d")
     idx = dhan.intraday_minute_data(
@@ -318,18 +317,20 @@ def mark_range():
     logtradeleg(
         COMMON_ID,
         "CE",
-        f"NIFTY CE {ce_strike}",
-        ce_strike,
-        str(today)
+        f"NIFTY CE {ATM}",
+        ATM,
+        str(today),
+        CE_ID
     )
 
     # Log PE leg
     logtradeleg(
         COMMON_ID,
         "PE",
-        f"NIFTY PE {pe_strike}",
-        pe_strike,
-        str(today)
+        f"NIFTY PE {ATM}",
+        ATM,
+        str(today),
+        PE_ID
     )   
 
     print("legs logged successfully")
@@ -351,7 +352,7 @@ def mark_range():
 # =========================
 
 def on_index_candle(token, t, row):
-    global pending_ce, pending_pe, stop_trading,allow_ce,allow_pe
+    global pending_ce, pending_pe, stop_trading
 
     if stop_trading:
         return
@@ -387,11 +388,6 @@ def on_index_candle(token, t, row):
 
     if pe_pos and row["close"] < top_line:
         exit_position("PE", last_pe_ltp, t,"INDEX")
-
-
-def on_option_candle(token, t, row):
-    if token == CE_ID and pending_ce:
-        price = row["open"]
 
 
 
@@ -439,7 +435,7 @@ def exit_position(side, price, t, reason):
         event_type="EXIT",
         leg_name=side,
         token=CE_ID if side == "CE" else PE_ID,
-        symbol=SYMBOL if side == "CE" else SYMBOL,
+        symbol=SYMBOL,
         side="BUY",  # exit of SELL = BUY
         lot=LOT,
         price=price,
@@ -469,30 +465,34 @@ def exit_position(side, price, t, reason):
 
 
 def on_tick_index(msg):
-    candle= idx_builder.process_tick(msg)
+    candle = idx_builder.process_tick(msg)
 
     if candle:
-        print("INDEX CANDLE:", candle)
-        t = candle["time"]
-        on_index_candle(msg["security_id"], t, candle)
+        on_index_candle(msg["security_id"], datetime.now(IST), candle)
 
 
 def on_tick_option(msg):
-
-    global ce_pos, pe_pos, pending_ce, pending_pe, last_ce_ltp, last_pe_ltp, ce_running_pnl, pe_running_pnl
+    global ce_pos, pe_pos, pending_ce, pending_pe, last_ce_ltp, last_pe_ltp
     
 
     token = str(msg["security_id"])
     ltp = msg.get("LTP")
     t = datetime.now(IST)
     if token == CE_ID:
-        print("CE tick",msg)
         last_ce_ltp = ltp
         telemetry["ce_ltp"] = ltp
     if token == PE_ID:
-        print("PE tick",msg)
         last_pe_ltp = ltp
         telemetry["pe_ltp"] = ltp
+
+    ce_running_pnl = 0
+    pe_running_pnl = 0
+
+    if ce_pos and last_ce_ltp:
+        ce_running_pnl = ce_pos["entry_price"] - last_ce_ltp
+
+    if pe_pos and last_pe_ltp:
+        pe_running_pnl = pe_pos["entry_price"] - last_pe_ltp
 
     # ---- LTP ENTRY ----
     if token == CE_ID and pending_ce and ce_pos is None:
@@ -550,6 +550,8 @@ def on_tick_option(msg):
     if token == PE_ID and pe_pos:
         manage_position("PE", ltp, t)
 
+    
+
 
     telemetry["ce_pnl"] = round(ce_running_pnl, 2)
     telemetry["pe_pnl"] = round(pe_running_pnl, 2)
@@ -559,8 +561,6 @@ def on_tick_option(msg):
 
 
 
-    # still keep candle builder
-    opt_builder.process_tick(msg)
 
 
 
@@ -577,28 +577,27 @@ if __name__ == "__main__":
     mark_range()
 
     instruments = [
-        (marketfeed.NSE, INDEX_TOKEN, marketfeed.Quote),
-        (marketfeed.NSE_FNO, CE_ID,marketfeed.Quote),
-        (marketfeed.NSE_FNO, PE_ID , marketfeed.Quote)
+        (marketfeed.NSE, INDEX_TOKEN),
+        (marketfeed.NSE_FNO, CE_ID),
+        (marketfeed.NSE_FNO, PE_ID)
     ]
 
     feed = marketfeed.DhanFeed(CLIENT_ID, ACCESS_TOKEN, instruments, "v2")
 
     print("\n🚀 Range Breakout Paper Engine Running...\n")
-    
-    feed.run_forever()
 
     while True:
         try:
+
+            feed.run_forever()
             msg = feed.get_data()
-         
 
             if msg:
 
-                if msg["security_id"] == int(INDEX_TOKEN):
+                if str(msg["security_id"]) == INDEX_TOKEN:
                     on_tick_index(msg)
 
-                elif msg["security_id"] in (int(CE_ID),int(PE_ID)):
+                elif str(msg["security_id"]) in (CE_ID, PE_ID):
                     on_tick_option(msg)
         except Exception as e:
             print("WS ERROR:", e)

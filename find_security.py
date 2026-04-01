@@ -33,28 +33,23 @@ IST = pytz.timezone("Asia/Kolkata")
 
 def load_fno_master() -> pd.DataFrame:
     print("...downloading FNO master")
+
     r = requests.get(FNO_MASTER_URL, headers={"access-token": ACCESS_TOKEN})
     r.raise_for_status()
 
-    df = pd.read_csv(StringIO(r.text), header=None, low_memory=False)
+    # ✅ Use header from API (IMPORTANT)
+    df = pd.read_csv(StringIO(r.text), low_memory=False)
 
-    df.columns = [
-        "EXCH_ID","SEGMENT","SECURITY_ID","ISIN","INSTRUMENT",
-        "UNDERLYING_SECURITY_ID","UNDERLYING_SYMBOL","SYMBOL_NAME",
-        "DISPLAY_NAME","INSTRUMENT_TYPE","SERIES","LOT_SIZE",
-        "SM_EXPIRY_DATE","STRIKE_PRICE","OPTION_TYPE","TICK_SIZE",
-        "EXPIRY_FLAG","BRACKET_FLAG","COVER_FLAG","ASM_GSM_FLAG",
-        "ASM_GSM_CATEGORY","BUY_SELL_INDICATOR",
-        "BUY_CO_MIN_MARGIN_PER","BUY_CO_SL_RANGE_MAX_PERC",
-        "BUY_CO_SL_RANGE_MIN_PERC","BUY_BO_MIN_MARGIN_PER",
-        "BUY_BO_PROFIT_RANGE_MAX_PERC","BUY_BO_PROFIT_RANGE_MIN_PERC",
-        "MTF_LEVERAGE","RESERVED"
-    ]
+    # ✅ Drop unwanted column
+    if "Unnamed: 31" in df.columns:
+        df = df.drop(columns=["Unnamed: 31"])
 
+    # ✅ Type conversions
     df["STRIKE_PRICE"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce")
     df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
 
     return df
+
 
 
 
