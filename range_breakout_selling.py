@@ -98,6 +98,9 @@ stop_trading = False
 allow_ce = True
 allow_pe = True
 
+last_ce_ltp = None
+last_pe_ltp = None
+
 
 telemetry = {
     "strategy_id": COMMON_ID,
@@ -352,7 +355,8 @@ def mark_range():
 # =========================
 
 def on_index_candle(token, t, row):
-    global pending_ce, pending_pe, stop_trading
+    global pending_ce, pending_pe, stop_trading, allow_ce, allow_pe
+    print(row)
 
     if stop_trading:
         return
@@ -418,7 +422,7 @@ def manage_position(side, price, t):
 
 
 def exit_position(side, price, t, reason):
-    global ce_pos, pe_pos, total_pnl, stop_trading ,allow_ce, allow_pe
+    global ce_pos, pe_pos, total_pnl, stop_trading
 
     pos = ce_pos if side == "CE" else pe_pos
     if stop_trading:
@@ -426,6 +430,7 @@ def exit_position(side, price, t, reason):
     if pos is None:
         return
 
+    price = float(price)
     pnl = pos["entry_price"] - price
     total_pnl += pnl
 
@@ -477,6 +482,15 @@ def on_tick_option(msg):
 
     token = str(msg["security_id"])
     ltp = msg.get("LTP")
+
+    if ltp is None:
+        return
+
+    try:
+        ltp = float(ltp)
+    except:
+        return
+
     t = datetime.now(IST)
     if token == CE_ID:
         last_ce_ltp = ltp
@@ -488,11 +502,11 @@ def on_tick_option(msg):
     ce_running_pnl = 0
     pe_running_pnl = 0
 
-    if ce_pos and last_ce_ltp:
-        ce_running_pnl = ce_pos["entry_price"] - last_ce_ltp
+    if ce_pos and last_ce_ltp  is not None:
+        ce_running_pnl = ce_pos["entry_price"] - float(last_ce_ltp)
 
-    if pe_pos and last_pe_ltp:
-        pe_running_pnl = pe_pos["entry_price"] - last_pe_ltp
+    if pe_pos and last_pe_ltp  is not None:
+        pe_running_pnl = pe_pos["entry_price"] - float(last_pe_ltp)
 
     # ---- LTP ENTRY ----
     if token == CE_ID and pending_ce and ce_pos is None:
@@ -577,9 +591,9 @@ if __name__ == "__main__":
     mark_range()
 
     instruments = [
-        (marketfeed.NSE, INDEX_TOKEN),
-        (marketfeed.NSE_FNO, CE_ID),
-        (marketfeed.NSE_FNO, PE_ID)
+        (marketfeed.NSE, INDEX_TOKEN,marketfeed.Quote ),
+        (marketfeed.NSE_FNO, CE_ID,marketfeed.Quote),
+        (marketfeed.NSE_FNO, PE_ID,marketfeed.Quote)
     ]
 
     feed = marketfeed.DhanFeed(CLIENT_ID, ACCESS_TOKEN, instruments, "v2")
