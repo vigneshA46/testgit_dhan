@@ -57,8 +57,8 @@ DAY_TARGET = -38
 LOT = 1
 LOTSIZE= 65
 
-#today = datetime.now(IST).strftime("%Y-%m-%d")
-today = "2024-09-11"
+today = datetime.now(IST).strftime("%Y-%m-%d")
+#today = "2024-09-11"
 
 # =========================
 # LOGIN
