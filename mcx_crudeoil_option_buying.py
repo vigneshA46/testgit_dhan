@@ -86,50 +86,80 @@ def get_future_close(security_id):
 
     idx = dhan.intraday_minute_data(
         security_id=security_id,
-        exchange_segment="MCX",
+        exchange_segment="MCX_COMM",
         instrument_type="FUTCOM",
         from_date=today,
         to_date=today
     )
 
+   
+
     data = idx.get("data", {})
     closes = data.get("close", [])
     timestamps = data.get("timestamp", [])
+
+    last_price = None
 
     for i in range(len(timestamps)):
         ts = datetime.fromtimestamp(timestamps[i], IST)
 
         if ts.hour == 15 and 15 <= ts.minute < 30:
-            price = float(closes[i])
-            print(f"📍 HIST 15:15 CLOSE @ {price}")
-            return price
+            last_price = float(closes[i])   
+
+    if last_price:
+        print(f"📍 3:15–3:30 CLOSE @ {last_price}")
+        return last_price
 
     print("❌ FUT CLOSE NOT FOUND")
     return None
 
-def get_first_candle_mark(security_id):
+def get_first_candle_mark_rest(security_id, access_token):
 
-    today = datetime.now(IST).strftime("%Y-%m-%d")
+    url = "https://api.dhan.co/v2/charts/intraday"
 
-    idx = dhan.intraday_minute_data(
-        security_id=security_id,
-        exchange_segment="MCX",
-        instrument_type="OPTFUT",
-        from_date=today,
-        to_date=today
-    )
+    headers = {
+        "access-token": access_token,
+        "Content-Type": "application/json"
+    }
 
-    data = idx.get("data", {})
+    payload = {
+        "securityId": int(security_id),
+        "exchangeSegment": "MCX_COMM",
+        "instrument": "OPTFUT",
+        "interval": "1",
+        "fromDate": today,
+        "toDate": today
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+
+    print("RAW RESPONSE:", response.text)  # 🔥 debug
+
+    if response.status_code != 200:
+        print("❌ API FAILED")
+        return None
+
+    res = response.json()
+
+    if res.get("status") != "success":
+        print("❌ API ERROR:", res)
+        return None
+
+    data = res.get("data", {})
     closes = data.get("close", [])
     timestamps = data.get("timestamp", [])
+
+    mark = None
 
     for i in range(len(timestamps)):
         ts = datetime.fromtimestamp(timestamps[i], IST)
 
         if ts.hour == 15 and ts.minute == 30:
             mark = float(closes[i])
-            print(f"📍 15:30 MARK {security_id} @ {mark}")
-            return mark
+
+    if mark is not None:
+        print(f"📍 15:30 MARK @ {mark}")
+        return mark
 
     print("❌ 15:30 candle not found")
     return None
@@ -450,6 +480,7 @@ def find_current_month_future(df, today):
 
     # ✅ Use header from API (IMPORTANT)
     df = pd.read_csv(StringIO(r.text), low_memory=False)
+    
     df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
     
     trade_date = pd.to_datetime(today)
@@ -465,11 +496,33 @@ def find_current_month_future(df, today):
 
     return fut.sort_values("SM_EXPIRY_DATE").iloc[0]
 
+def find_option_security(df,strike, option_type, today, target_symbol):
+
+    trade_date = pd.to_datetime(today)
+    df=df.copy()
+
+    df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
+    df["STRIKE_PRICE"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce")
+    print("COLUMNS:", fno_df.columns.tolist())
+
+    opt = df[
+        (df["INSTRUMENT"] == "OPTFUT") & 
+        (df["UNDERLYING_SYMBOL"] == target_symbol) &
+        (df["STRIKE_PRICE"] == strike) &  
+        (df["OPTION_TYPE"] == option_type) &   
+        (df["SM_EXPIRY_DATE"] >= trade_date)
+    ]
+
+    if opt.empty:
+        raise ValueError(f"❌ No {option_type} found for strike {strike}")
+
+    return opt.sort_values("SM_EXPIRY_DATE").iloc[0]
+
 #fno_df = load_fno_master()
 
 fno_df = load_fno_master()
 
-today_date = datetime.now().date()
+#today_date = datetime.now().date()
 
 currentfut = find_current_month_future(fno_df, today)
 
@@ -483,8 +536,8 @@ ATM = calculate_atm(FutClose)
 print("ATM strike price", ATM)
 
 
-ce_row = find_option_security(fno_df, ATM, "CE", today_date, "CRUDEOIL")
-pe_row = find_option_security(fno_df, ATM, "PE", today_date, "CRUDEOIL")
+ce_row = find_option_security(fno_df, ATM, "CE", today, "CRUDEOIL")
+pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
 
 CE_TOKEN = str(ce_row["SECURITY_ID"])
 PE_TOKEN = str(pe_row["SECURITY_ID"])
@@ -522,8 +575,8 @@ def on_tick(msg):
 
 
 instruments = [
-    (marketfeed.MCX, CE_TOKEN),
-    (marketfeed.MCX, PE_TOKEN)
+    (marketfeed.MCX_COMM, CE_TOKEN),
+    (marketfeed.MCX_COMM, PE_TOKEN)
 ]
 
 
