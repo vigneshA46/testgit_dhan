@@ -133,7 +133,7 @@ def get_first_candle_mark_rest(security_id, access_token):
 
     response = requests.post(url, json=payload, headers=headers)
 
-    print("RAW RESPONSE:", response.text)  # 🔥 debug
+    print("RAW RESPONSE:", response.text) 
 
     if response.status_code != 200:
         print("❌ API FAILED")
@@ -513,8 +513,11 @@ def find_option_security(df,strike, option_type, today, target_symbol):
         (df["SM_EXPIRY_DATE"] >= trade_date)
     ]
 
+    print("OPT",opt)
+
     if opt.empty:
         raise ValueError(f"❌ No {option_type} found for strike {strike}")
+        
 
     return opt.sort_values("SM_EXPIRY_DATE").iloc[0]
 
@@ -546,8 +549,8 @@ PE_TOKEN = str(pe_row["SECURITY_ID"])
 print("CE TOKEN", CE_TOKEN)
 print("PE TOKEN", PE_TOKEN)
 
-CE_CLOSE = get_first_candle_mark(CE_TOKEN)
-PE_CLOSE = get_first_candle_mark(PE_TOKEN)
+CE_CLOSE = get_first_candle_mark(CE_TOKEN,access_token)
+PE_CLOSE = get_first_candle_mark(PE_TOKEN,access_token)
 
 print("CE 15:30 candle close", CE_CLOSE)
 print("PE 15:30 candle close", PE_CLOSE)
