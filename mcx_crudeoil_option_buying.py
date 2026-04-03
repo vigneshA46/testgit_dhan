@@ -8,7 +8,6 @@ from dhanhq import marketfeed
 from dhanhq import dhanhq
 from dhan_token import get_access_token
 from candle_builder import OneMinuteCandleBuilder
-from find_security import load_fno_master, find_option_security
 import threading
 from dispatcher import subscribe
 from queue import Queue
@@ -18,6 +17,9 @@ from io import StringIO
 # =========================
 # CONFIG
 # =========================
+
+
+
 trade_log_queue = Queue()
 def trade_log_worker():
     while True:
@@ -35,25 +37,40 @@ TRADE_LOG_URL = "https://dreaminalgo-backend-production.up.railway.app/api/paper
 EVENT_LOG_URL = "https://dreaminalgo-backend-production.up.railway.app/api/paperlogger/paperlogger"
 
 MCX_MASTER_URL = "https://api.dhan.co/v2/instrument/MCX_COMM"
+INTRADAY_URL = "https://api.dhan.co/v2/charts/intraday"
+
+
+
+
+
 
 STRATEGY_NAME = "MCX CRUDE OIL OPTION BUYING"
 
 client_id = os.getenv("CLIENT_ID")
 access_token = get_access_token()
 
+HEADERS = {
+    "Content-Type": "application/json",
+    "access-token": access_token
+}
+
+UNDERLYING_SYMBOL = "CRUDEOIL"
+STRIKE_STEP = 50
+INTERVAL_1M = "1"
+INTERVAL_15M = "15"
 
 IST = pytz.timezone("Asia/Kolkata")
 
-COMMON_ID = "7f4993c0-bc6b-4f42-a6ce-afcbb5709bae"
+COMMON_ID = "617126ad-4197-4272-a08f-cc2ad43b3858"
 SYMBOL = "CRUDEOIL"
 
-TRADE_START = dtime(15, 30)
+TRADE_START = dtime(8, 30)
 TRADE_END   = dtime(22, 30)
 
 LOTSIZE = 100
 
-today = datetime.now(IST).strftime("%Y-%m-%d")
-
+#today = datetime.now(IST).strftime("%Y-%m-%d")
+today = "2026-04-01"
 # =========================
 # LOGIN
 # =========================
@@ -67,6 +84,31 @@ builder = OneMinuteCandleBuilder()
 # HELPERS
 # =========================
 
+
+
+def load_fno_master() -> pd.DataFrame:
+    print("...downloading FNO master")
+
+    r = requests.get(MCX_MASTER_URL, headers={"access-token": access_token})
+    r.raise_for_status()
+
+    # ✅ Use header from API (IMPORTANT)
+    df = pd.read_csv(StringIO(r.text), low_memory=False)
+
+    # ✅ Drop unwanted column
+    if "Unnamed: 31" in df.columns:
+        df = df.drop(columns=["Unnamed: 31"])
+
+    # ✅ Type conversions
+    df["STRIKE_PRICE"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce")
+    df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
+
+    return df
+
+
+
+
+
 def wait_for_start():
     print("⏳ Waiting for market...")
     while True:
@@ -79,39 +121,56 @@ def wait_for_start():
 def calculate_atm(price, step=50):
     return int(round(price / step) * step)
 
+# =====================================================
+# STEP 3: FETCH INTRADAY DATA
+# =====================================================
 
-def get_future_close(security_id):
 
-    today = datetime.now(IST).strftime("%Y-%m-%d")
+def fetch_intraday(security_id, instrument, interval, trade_date):
+    payload = {
+        "securityId": str(security_id),
+        "exchangeSegment": "MCX_COMM",
+        "instrument": instrument,
+        "interval": interval,
+        "fromDate": f"{trade_date} {TRADE_START}",
+        "toDate": f"{trade_date} {TRADE_END}"
+    }
 
-    idx = dhan.intraday_minute_data(
-        security_id=security_id,
-        exchange_segment="MCX_COMM",
-        instrument_type="FUTCOM",
-        from_date=today,
-        to_date=today
-    )
+    r = requests.post(INTRADAY_URL, headers=HEADERS, json=payload)
+    r.raise_for_status()
+    data = r.json()
 
-   
+    df = pd.DataFrame({
+        "timestamp": data["timestamp"],
+        "open": data["open"],
+        "high": data["high"],
+        "low": data["low"],
+        "close": data["close"]
+    })
 
-    data = idx.get("data", {})
-    closes = data.get("close", [])
-    timestamps = data.get("timestamp", [])
+    dt = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+    df["datetime"] = dt.dt.tz_convert(IST)
 
-    last_price = None
+    df.sort_values("datetime", inplace=True)
+    df.reset_index(drop=True, inplace=True)
 
-    for i in range(len(timestamps)):
-        ts = datetime.fromtimestamp(timestamps[i], IST)
+    return df
 
-        if ts.hour == 15 and 15 <= ts.minute < 30:
-            last_price = float(closes[i])   
+# =====================================================
+# STEP 4: GET 3:15–3:30 FUT CANDLE
+# =====================================================
 
-    if last_price:
-        print(f"📍 3:15–3:30 CLOSE @ {last_price}")
-        return last_price
+def get_315_candle(df):
+    candle = df[
+        df["datetime"].dt.strftime("%H:%M:%S") == "15:30:00"
+    ]
 
-    print("❌ FUT CLOSE NOT FOUND")
-    return None
+    if candle.empty:
+        raise ValueError("❌ 3:15–3:30 candle not found")
+
+    return candle.iloc[0]
+
+
 
 def get_first_candle_mark_rest(security_id, access_token):
 
@@ -140,12 +199,12 @@ def get_first_candle_mark_rest(security_id, access_token):
         return None
 
     res = response.json()
+    if "data" in res:
+            data = res["data"]
+    else:
+            data = res
 
-    if res.get("status") != "success":
-        print("❌ API ERROR:", res)
-        return None
-
-    data = res.get("data", {})
+    #data = res.get("data", {})
     closes = data.get("close", [])
     timestamps = data.get("timestamp", [])
 
@@ -496,9 +555,11 @@ def find_current_month_future(df, today):
 
     return fut.sort_values("SM_EXPIRY_DATE").iloc[0]
 
-def find_option_security(df,strike, option_type, today, target_symbol):
 
-    trade_date = pd.to_datetime(today)
+
+def find_option_security(df , strike , option_type, today, target_symbol):
+
+    trade_date = pd.to_datetime("2026-04-01")
     df=df.copy()
 
     df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
@@ -507,7 +568,7 @@ def find_option_security(df,strike, option_type, today, target_symbol):
 
     opt = df[
         (df["INSTRUMENT"] == "OPTFUT") & 
-        (df["UNDERLYING_SYMBOL"] == target_symbol) &
+        (df["UNDERLYING_SYMBOL"] == SYMBOL) &
         (df["STRIKE_PRICE"] == strike) &  
         (df["OPTION_TYPE"] == option_type) &   
         (df["SM_EXPIRY_DATE"] >= trade_date)
@@ -524,6 +585,7 @@ def find_option_security(df,strike, option_type, today, target_symbol):
 #fno_df = load_fno_master()
 
 fno_df = load_fno_master()
+print(fno_df.iloc[0])
 
 #today_date = datetime.now().date()
 
@@ -533,9 +595,17 @@ currfuttoken = str(currentfut["SECURITY_ID"])
 
 print("future token", currfuttoken)
 
-FutClose = get_future_close(currfuttoken)
+fut_df = fetch_intraday(
+        currfuttoken,
+        instrument="FUTCOM",
+        interval=INTERVAL_15M,
+        trade_date=today
+    )
 
-ATM = calculate_atm(FutClose)
+candle_315 = get_315_candle(fut_df)
+marked_price = candle_315["close"]
+
+ATM = calculate_atm(marked_price)
 print("ATM strike price", ATM)
 
 
@@ -549,8 +619,8 @@ PE_TOKEN = str(pe_row["SECURITY_ID"])
 print("CE TOKEN", CE_TOKEN)
 print("PE TOKEN", PE_TOKEN)
 
-CE_CLOSE = get_first_candle_mark(CE_TOKEN,access_token)
-PE_CLOSE = get_first_candle_mark(PE_TOKEN,access_token)
+CE_CLOSE = get_first_candle_mark_rest(CE_TOKEN,access_token)
+PE_CLOSE = get_first_candle_mark_rest(PE_TOKEN,access_token)
 
 print("CE 15:30 candle close", CE_CLOSE)
 print("PE 15:30 candle close", PE_CLOSE)
@@ -578,8 +648,8 @@ def on_tick(msg):
 
 
 instruments = [
-    (marketfeed.MCX_COMM, CE_TOKEN),
-    (marketfeed.MCX_COMM, PE_TOKEN)
+    (marketfeed.MCX, CE_TOKEN),
+    (marketfeed.MCX, PE_TOKEN)
 ]
 
 
