@@ -389,7 +389,7 @@ threading.Thread(target=trade_log_worker, daemon=True).start()
 
 class MCXCrudeOptionPaperEngine:
 
-    def __init__(self, ce_token, pe_token, ce_base, pe_base):
+    def __init__(self, ce_token, pe_token, ce_base, pe_base,fut_base):
 
         self.ce_token = ce_token
         self.pe_token = pe_token
@@ -408,6 +408,7 @@ class MCXCrudeOptionPaperEngine:
         self.realized_pnl = 0
         self.target_hit = False
         self.restricted_mode = False
+        self.fut_base = fut_base
 
         print("---- ENGINE INITIALIZED ----")
         print("CE BUFFER:", self.ce_buffer)
@@ -419,7 +420,9 @@ class MCXCrudeOptionPaperEngine:
             "entry": None,
             "tsl_active": False,
             "tsl": None,
-            "buffer_reset": False
+            "buffer_reset": False,
+            "last_price": None,
+            "pending_entry": False
         }
 
     def on_new_candle(self, token, time, candle):
@@ -434,20 +437,40 @@ class MCXCrudeOptionPaperEngine:
         base = self.ce_base if token == self.ce_token else self.pe_base
         buffer = self.ce_buffer if token == self.ce_token else self.pe_buffer
 
+
+        if leg["pending_entry"]:
+            self._enter(token, o)
+            leg["pending_entry"] = False
+            return
+
+
         if leg["active"]:
-            self._manage_position(token, c)
+            if c < self.fut_base:
+                print(f"❌ CANDLE SL HIT {token}")
+                self._exit(token, c)
+                return
+
             return
 
         if self.restricted_mode:
+
+            if self.realized_pnl > -25:
+                return
+
             if c < buffer:
                 leg["buffer_reset"] = True
+                return
 
-            if leg["buffer_reset"] and self._breakout_condition(c, avg, buffer):
-                self._enter(token, c)
+            if not leg["buffer_reset"]:
+                return
+
+            if self._breakout_condition(c, avg, buffer):
+                leg["pending_entry"] = True
                 leg["buffer_reset"] = False
         else:
             if self._breakout_condition(c, avg, buffer):
-                self._enter(token, c)
+                    leg["pending_entry"] = True
+                    
 
     def _breakout_condition(self, close, avg, buffer):
         return close > buffer and avg > buffer and avg < close
@@ -458,36 +481,44 @@ class MCXCrudeOptionPaperEngine:
         leg["entry"] = price
         leg["tsl_active"] = False
         leg["tsl"] = None
+        leg["last_price"] = price
+        leg["pending_entry"] = False
         print(f"🚀 ENTRY {token} @ {price}")
 
-    def _manage_position(self, token, close_price):
+    def on_tick(self, token, price):
+
+        if self.target_hit:
+            return
 
         leg = self.state[token]
+
+        if not leg["active"]:
+            return
+
+        leg["last_price"] = price
+
         entry = leg["entry"]
-        pnl = close_price - entry
+        pnl = price - entry
 
         base = self.ce_base if token == self.ce_token else self.pe_base
-        if close_price < base:
-            print(f"❌ MARKED EXIT {token}")
-            self._exit(token, close_price)
-            return
 
         if not leg["tsl_active"] and pnl >= 15:
             leg["tsl_active"] = True
-            leg["tsl"] = close_price - 10
+            leg["tsl"] = price - 10
             print(f"🔁 TSL ACTIVATED {token} @ {leg['tsl']}")
 
         if leg["tsl_active"]:
-            new_tsl = close_price - 10
+            new_tsl = price - 10
+
             if new_tsl > leg["tsl"]:
                 leg["tsl"] = new_tsl
 
-            if close_price <= leg["tsl"]:
+            if price <= leg["tsl"]:
                 print(f"❌ TSL EXIT {token}")
-                self._exit(token, close_price)
+                self._exit(token, price)
                 return
 
-        self._check_global_target(close_price, token)
+        self._check_global_target()
 
     def _exit(self, token, price):
 
@@ -500,28 +531,30 @@ class MCXCrudeOptionPaperEngine:
 
         self.state[token] = self._empty_leg()
 
-        if self.realized_pnl <= -25:
-            self.restricted_mode = True
-            print("⚠ RESTRICTED MODE ENABLED")
-
-    def _check_global_target(self, current_price, token):
+    def _check_global_target(self):
 
         unrealized = 0
 
         for t, leg in self.state.items():
             if leg["active"]:
+                current_price = leg["last_price"] if leg["last_price"] else leg["entry"]
                 unrealized += current_price - leg["entry"]
 
         combined = self.realized_pnl + unrealized
 
+        if combined <= -25:
+            self.restricted_mode = True
+            print("⚠ RESTRICTED MODE ENABLED (COMBINED LOSS)")
+
         if combined >= 50:
             print("🎯 TARGET HIT 50 POINTS")
-            self._exit_all(current_price)
+            self._exit_all()
 
-    def _exit_all(self, price):
+    def _exit_all(self):
 
         for token, leg in self.state.items():
             if leg["active"]:
+                price = leg["last_price"] if leg["last_price"] else leg["entry"]
                 self._exit(token, price)
 
         self.target_hit = True
@@ -574,7 +607,7 @@ def find_option_security(df , strike , option_type, today, target_symbol):
         (df["SM_EXPIRY_DATE"] >= trade_date)
     ]
 
-    print("OPT",opt)
+    #print("OPT",opt)
 
     if opt.empty:
         raise ValueError(f"❌ No {option_type} found for strike {strike}")
@@ -630,7 +663,8 @@ engine = MCXCrudeOptionPaperEngine(
     CE_TOKEN,
     PE_TOKEN,
     CE_CLOSE,
-    PE_CLOSE
+    PE_CLOSE,
+    fut_base=candle_315["close"]
 )
 
 
@@ -639,6 +673,14 @@ def on_candle(token, time, candle):
 
 
 def on_tick(msg):
+    token = str(msg["security_id"])
+    ltp = msg.get("LTP") or msg.get("last_price")
+
+    if not ltp:
+        return
+
+    
+    engine.on_tick(token, ltp)
     builder.process_tick(msg, on_candle)
 
 
