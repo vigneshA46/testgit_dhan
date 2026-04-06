@@ -64,7 +64,7 @@ IST = pytz.timezone("Asia/Kolkata")
 COMMON_ID = "617126ad-4197-4272-a08f-cc2ad43b3858"
 SYMBOL = "CRUDEOIL"
 
-TRADE_START = dtime(8, 30)
+TRADE_START = dtime(15, 30)
 TRADE_END   = dtime(22, 30)
 
 LOTSIZE = 100
