@@ -64,19 +64,19 @@ IST = pytz.timezone("Asia/Kolkata")
 COMMON_ID = "617126ad-4197-4272-a08f-cc2ad43b3858"
 SYMBOL = "CRUDEOIL"
 
-TRADE_START = dtime(15, 30)
+TRADE_START = dtime(15, 31)
 TRADE_END   = dtime(22, 30)
 
 LOTSIZE = 100
 
-#today = datetime.now(IST).strftime("%Y-%m-%d")
-today = "2026-04-01"
+today = datetime.now(IST).strftime("%Y-%m-%d")
+#today = "2026-04-01"
 # =========================
 # LOGIN
 # =========================
 
 dhan = dhanhq(client_id, access_token)
-builder = OneMinuteCandleBuilder()
+
 
 
 
@@ -131,7 +131,7 @@ def fetch_intraday(security_id, instrument, interval, trade_date):
         "securityId": str(security_id),
         "exchangeSegment": "MCX_COMM",
         "instrument": instrument,
-        "interval": interval,
+        "interval": "15",
         "fromDate": f"{trade_date} {TRADE_START}",
         "toDate": f"{trade_date} {TRADE_END}"
     }
@@ -153,6 +153,8 @@ def fetch_intraday(security_id, instrument, interval, trade_date):
 
     df.sort_values("datetime", inplace=True)
     df.reset_index(drop=True, inplace=True)
+
+    print(df)
 
     return df
 
@@ -192,7 +194,7 @@ def get_first_candle_mark_rest(security_id, access_token):
 
     response = requests.post(url, json=payload, headers=headers)
 
-    print("RAW RESPONSE:", response.text) 
+    #print("RAW RESPONSE:", response.text) 
 
     if response.status_code != 200:
         print("❌ API FAILED")
@@ -310,7 +312,7 @@ def logtradeleg(strategyid, leg, symbol, strike_price, date, token):
 telemetry = {
     "strategy_id": COMMON_ID,
     "run_id": COMMON_ID,
-    "status": "RUNNING",
+    "status": "ACTIVE",
     "pnl": 0.0,
     "pnl_percentage": 0.0,
     "ce_ltp": 0.0,
@@ -427,6 +429,8 @@ class MCXCrudeOptionPaperEngine:
 
     def on_new_candle(self, token, time, candle):
 
+        print(candle , time , token)
+
         if self.target_hit:
             return
 
@@ -445,8 +449,9 @@ class MCXCrudeOptionPaperEngine:
 
 
         if leg["active"]:
-            if c < self.fut_base:
-                print(f"❌ CANDLE SL HIT {token}")
+            base = self.ce_base if token == self.ce_token else self.pe_base
+            if c < base:
+                print(f"SL CHECK {token}: close={c}, base={base}")
                 self._exit(token, c)
                 return
 
@@ -483,9 +488,31 @@ class MCXCrudeOptionPaperEngine:
         leg["tsl"] = None
         leg["last_price"] = price
         leg["pending_entry"] = False
+        name = "CE" if token == self.ce_token else "PE"
         print(f"🚀 ENTRY {token} @ {price}")
 
+        telemetry["status"] = "RUNNING"
+
+        log_trade_event(
+            event_type="ENTRY",
+            leg_name=name,
+            token=token,
+            symbol=SYMBOL,
+            side="BUY",
+            lot=1,
+            price=price,
+            reason="BREAKOUT",
+            pnl=0,
+            cum_pnl=self.realized_pnl
+            )
+
     def on_tick(self, token, price):
+
+        if token == self.ce_token:
+            telemetry["ce_ltp"] = price
+        else:
+            telemetry["pe_ltp"] = price
+
 
         if self.target_hit:
             return
@@ -499,6 +526,27 @@ class MCXCrudeOptionPaperEngine:
 
         entry = leg["entry"]
         pnl = price - entry
+
+        ce_pnl = 0
+        pe_pnl = 0
+
+        for t, leg in self.state.items():
+            if leg["active"]:
+                current_price = leg["last_price"] or leg["entry"]
+                pnl = current_price - leg["entry"]
+
+                if t == self.ce_token:
+                    ce_pnl = pnl
+                else:
+                    pe_pnl = pnl
+
+        telemetry["ce_pnl"] = ce_pnl
+        telemetry["pe_pnl"] = pe_pnl
+
+        combined = self.realized_pnl + ce_pnl + pe_pnl
+        telemetry["pnl"] = combined
+
+
 
         base = self.ce_base if token == self.ce_token else self.pe_base
 
@@ -526,8 +574,25 @@ class MCXCrudeOptionPaperEngine:
         pnl = price - leg["entry"]
         self.realized_pnl += pnl
 
+        name = "CE" if token == self.ce_token else "PE"
+
         print(f"🏁 EXIT {token} @ {price} | PnL: {pnl}")
         print(f"📊 CUMULATIVE PnL: {self.realized_pnl}")
+        telemetry["pnl"] = self.realized_pnl
+
+        log_trade_event(
+            event_type="EXIT",
+            leg_name=name,
+            token=token,
+            symbol=SYMBOL,
+            side="SELL",
+            lot=1,
+            price=price,
+            reason="EXIT",   # we improve this below 👇
+            pnl=pnl,
+            cum_pnl=self.realized_pnl
+        )
+
 
         self.state[token] = self._empty_leg()
 
@@ -545,6 +610,7 @@ class MCXCrudeOptionPaperEngine:
         if combined <= -25:
             self.restricted_mode = True
             print("⚠ RESTRICTED MODE ENABLED (COMBINED LOSS)")
+            telemetry["status"] = "CLOSED"
 
         if combined >= 50:
             print("🎯 TARGET HIT 50 POINTS")
@@ -559,6 +625,7 @@ class MCXCrudeOptionPaperEngine:
 
         self.target_hit = True
         print("🛑 TRADING DISABLED FOR DAY")
+        telemetry["status"] = "CLOSED"
 
 
 # =========================
@@ -597,7 +664,7 @@ def find_option_security(df , strike , option_type, today, target_symbol):
 
     df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
     df["STRIKE_PRICE"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce")
-    print("COLUMNS:", fno_df.columns.tolist())
+    #print("COLUMNS:", fno_df.columns.tolist())
 
     opt = df[
         (df["INSTRUMENT"] == "OPTFUT") & 
@@ -618,7 +685,7 @@ def find_option_security(df , strike , option_type, today, target_symbol):
 #fno_df = load_fno_master()
 
 fno_df = load_fno_master()
-print(fno_df.iloc[0])
+#print(fno_df.iloc[0])
 
 #today_date = datetime.now().date()
 
@@ -648,6 +715,34 @@ pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
 CE_TOKEN = str(ce_row["SECURITY_ID"])
 PE_TOKEN = str(pe_row["SECURITY_ID"])
 
+builders = {
+    str(CE_TOKEN): OneMinuteCandleBuilder(),
+    str(PE_TOKEN): OneMinuteCandleBuilder()
+}
+
+
+# Log CE leg
+logtradeleg(
+    COMMON_ID,
+    "CE",
+    f"NIFTY CE {ATM}",
+    ATM,
+    str(today),
+    CE_TOKEN
+)
+
+
+logtradeleg(
+    COMMON_ID,
+    "PE",
+    f"NIFTY PE {ATM}",
+    ATM,
+    str(today),
+    PE_TOKEN
+)
+
+print("trade leg logged")
+
 
 print("CE TOKEN", CE_TOKEN)
 print("PE TOKEN", PE_TOKEN)
@@ -668,20 +763,33 @@ engine = MCXCrudeOptionPaperEngine(
 )
 
 
-def on_candle(token, time, candle):
-    engine.on_new_candle(token, time, candle)
+def on_candle(token, candle):
+    engine.on_new_candle(token, candle["timestamp"], candle)
 
 
 def on_tick(msg):
+
+    if msg["type"] != 'Quote Data':
+        return
+
     token = str(msg["security_id"])
-    ltp = msg.get("LTP") or msg.get("last_price")
+    ltp = msg.get("LTP")
 
     if not ltp:
         return
 
+    ltp = float(ltp)  
+
+    builder = builders.get(token)
+
+    if not builder:
+        return
     
     engine.on_tick(token, ltp)
-    builder.process_tick(msg, on_candle)
+    candle = builder.process_tick(msg)
+
+    if candle:
+        on_candle(token, candle)
 
 
 # ======================
@@ -690,20 +798,22 @@ def on_tick(msg):
 
 
 instruments = [
-    (marketfeed.MCX, CE_TOKEN),
-    (marketfeed.MCX, PE_TOKEN)
+    (marketfeed.MCX, CE_TOKEN , marketfeed.Quote),
+    (marketfeed.MCX, PE_TOKEN, marketfeed.Quote)
 ]
 
 
-feed = marketfeed.DhanFeed(
-    client_id=client_id,
-    access_token=access_token,
-    instruments=instruments
-)
+feed = marketfeed.DhanFeed(client_id,access_token,instruments,"v2")
 
 
 while True:
-    data = feed.get_data()
+    try:
+        feed.run_forever()
+        data = feed.get_data()
 
-    if data:
-        on_tick(data)
+        if data:
+            on_tick(data)
+
+    except Exception as e:
+        print("WS ERROR:", e)
+        feed.run_forever()

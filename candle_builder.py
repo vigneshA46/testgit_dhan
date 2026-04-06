@@ -51,7 +51,7 @@ class OneMinuteCandleBuilder:
     def _start_new_candle(self, minute_key, ltp, volume):
         self.current_minute = minute_key
         self.current_candle = {
-            "timestamp": minute_key,
+            "timestamp": minute_key.isoformat(),
             "open": ltp,
             "high": ltp,
             "low": ltp,
