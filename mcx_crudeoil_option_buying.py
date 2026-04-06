@@ -33,8 +33,8 @@ def trade_log_worker():
 
 load_dotenv()
 
-TRADE_LOG_URL = "https://dreaminalgo-backend-production.up.railway.app/api/paperlogger/event"
-EVENT_LOG_URL = "https://dreaminalgo-backend-production.up.railway.app/api/paperlogger/paperlogger"
+TRADE_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/event"
+EVENT_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/paperlogger"
 
 MCX_MASTER_URL = "https://api.dhan.co/v2/instrument/MCX_COMM"
 INTRADAY_URL = "https://api.dhan.co/v2/charts/intraday"
@@ -283,7 +283,7 @@ def log_trade_event(
     trade_log_queue.put(payload)
 
 def logtradeleg(strategyid, leg, symbol, strike_price, date, token):
-    url = "https://dreaminalgo-backend-production.up.railway.app/api/tradelegs/create"
+    url = "https://algoapi.dreamintraders.in/api/tradelegs/create"
     
     payload = {
         "strategy_id": strategyid,
@@ -340,7 +340,7 @@ def telemetry_broadcaster():
 
 
             res = requests.post(
-                "https://dreaminalgo-backend-production.up.railway.app/api/telemetry",
+                "https://algoapi.dreamintraders.in/api/telemetry",
                 json=payload,
                 timeout=0.5   # 🔥 keep it LOW
             )
@@ -725,7 +725,7 @@ builders = {
 logtradeleg(
     COMMON_ID,
     "CE",
-    f"NIFTY CE {ATM}",
+    f"CRUDEOIL CE {ATM}",
     ATM,
     str(today),
     CE_TOKEN
@@ -735,7 +735,7 @@ logtradeleg(
 logtradeleg(
     COMMON_ID,
     "PE",
-    f"NIFTY PE {ATM}",
+    f"CRUDEOIL PE {ATM}",
     ATM,
     str(today),
     PE_TOKEN
