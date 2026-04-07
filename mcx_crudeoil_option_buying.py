@@ -276,8 +276,8 @@ def log_trade_event(
         "reason": reason,
         "deployed_by": COMMON_ID,
 
-        "pnl": str(pnl),
-        "cum_pnl":str(cum_pnl)
+        "pnl": str(pnl * 100),
+        "cum_pnl":str(cum_pnl *100)
     }
    
     trade_log_queue.put(payload)
@@ -611,9 +611,12 @@ class MCXCrudeOptionPaperEngine:
             self.restricted_mode = True
             print("⚠ RESTRICTED MODE ENABLED (COMBINED LOSS)")
             telemetry["status"] = "CLOSED"
+            self._exit_all()
+            
 
         if combined >= 50:
             print("🎯 TARGET HIT 50 POINTS")
+            telemetry["status"] = "CLOSED"
             self._exit_all()
 
     def _exit_all(self):
