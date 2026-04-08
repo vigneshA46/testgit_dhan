@@ -441,22 +441,7 @@ class MCXCrudeOptionPaperEngine:
         base = self.ce_base if token == self.ce_token else self.pe_base
         buffer = self.ce_buffer if token == self.ce_token else self.pe_buffer
 
-
-        if leg["pending_entry"]:
-            self._enter(token, o)
-            leg["pending_entry"] = False
-            return
-
-
-        if leg["active"]:
-            base = self.ce_base if token == self.ce_token else self.pe_base
-            if c < base:
-                print(f"SL CHECK {token}: close={c}, base={base}")
-                self._exit(token, c)
-                return
-
-            return
-
+       
         if self.restricted_mode:
 
             if self.realized_pnl > -25:
@@ -520,6 +505,12 @@ class MCXCrudeOptionPaperEngine:
         leg = self.state[token]
 
         if not leg["active"]:
+
+            if leg["pending_entry"] and not leg["active"]:
+                print(f"⚡ ENTRY {token} @ {price}")
+                self._enter(token, price)
+                leg["pending_entry"] = False
+                return
             return
 
         leg["last_price"] = price
@@ -546,9 +537,14 @@ class MCXCrudeOptionPaperEngine:
         combined = self.realized_pnl + ce_pnl + pe_pnl
         telemetry["pnl"] = combined
 
-
-
         base = self.ce_base if token == self.ce_token else self.pe_base
+
+
+        # 🔥 HARD SL (tick-based)
+        if price <= base:
+            print(f"❌ SL EXIT {token} @ {price}")
+            self._exit(token, price)
+            return
 
         if not leg["tsl_active"] and pnl >= 15:
             leg["tsl_active"] = True
@@ -592,7 +588,6 @@ class MCXCrudeOptionPaperEngine:
             pnl=pnl,
             cum_pnl=self.realized_pnl
         )
-
 
         self.state[token] = self._empty_leg()
 
@@ -662,7 +657,7 @@ def find_current_month_future(df, today):
 
 def find_option_security(df , strike , option_type, today, target_symbol):
 
-    trade_date = pd.to_datetime("2026-04-01")
+    trade_date = pd.to_datetime(today)
     df=df.copy()
 
     df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
