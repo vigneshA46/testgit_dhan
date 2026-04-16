@@ -424,7 +424,9 @@ class MCXCrudeOptionPaperEngine:
             "tsl": None,
             "buffer_reset": False,
             "last_price": None,
-            "pending_entry": False
+            "pending_entry": False,
+            "rearm_required": False,
+            "sl": None,
         }
 
     def on_new_candle(self, token, time, candle):
@@ -546,22 +548,28 @@ class MCXCrudeOptionPaperEngine:
             self._exit(token, price)
             return
 
-        if not leg["tsl_active"] and pnl >= 15:
-            leg["tsl_active"] = True
-            leg["tsl"] = price - 10
-            print(f"🔁 TSL ACTIVATED {token} @ {leg['tsl']}")
+        if not leg["tsl_active"]:
+            if price >= leg["entry"] + 15:
+                leg["tsl_active"] = True
+                leg["tsl"] = leg["entry"] + 15
+                leg["sl"] = leg["entry"] + 10
+                print(f"🔁 TSL ACTIVATED @ TSL={leg['tsl']} SL={leg['sl']}")
 
         if leg["tsl_active"]:
-            new_tsl = price - 10
 
-            if new_tsl > leg["tsl"]:
-                leg["tsl"] = new_tsl
+            # Step move
+            if price >= leg["tsl"] + 10:
+                leg["tsl"] += 10
+                leg["sl"]  += 10
 
-            if price <= leg["tsl"]:
-                print(f"❌ TSL EXIT {token}")
+                print(f"🔼 TSL STEP MOVE → TSL={leg['tsl']} SL={leg['sl']}")
+
+            # Exit condition
+            if price <= leg["sl"]:
+                print(f"❌ SL EXIT {token} @ {price}")
+                leg["rearm_required"] = True
                 self._exit(token, price)
                 return
-
         self._check_global_target()
 
     def _exit(self, token, price):
