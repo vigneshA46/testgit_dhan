@@ -756,6 +756,9 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
     total = ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running
 
+    if target_hit:
+        return
+
 
     # TARGET EXIT
     if total >= 50:
