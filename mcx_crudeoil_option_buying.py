@@ -914,8 +914,8 @@ pe_state["buffer"] = pe_state["marked"] + 8
 
 
 instruments = [
-    (marketfeed.NSE_FNO, str(CE_ID), marketfeed.Quote),
-    (marketfeed.NSE_FNO, str(PE_ID), marketfeed.Quote)
+    (marketfeed.MCX, str(CE_ID), marketfeed.Quote),
+    (marketfeed.MCX, str(PE_ID), marketfeed.Quote)
     ]
 
 
