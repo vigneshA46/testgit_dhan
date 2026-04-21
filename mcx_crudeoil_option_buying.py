@@ -491,11 +491,6 @@ print("trade leg logged")
 print("CE TOKEN", CE_TOKEN)
 print("PE TOKEN", PE_TOKEN)
 
-CE_CLOSE = get_first_candle_mark_rest(CE_TOKEN,access_token)
-PE_CLOSE = get_first_candle_mark_rest(PE_TOKEN,access_token)
-
-print("CE 15:30 candle close", CE_CLOSE)
-print("PE 15:30 candle close", PE_CLOSE)
 
 
 # =========================
@@ -882,7 +877,6 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
 today = datetime.now(IST).strftime("%Y-%m-%d")
 
-wait_for_start()
 
 ATM = calculate_atm(marked_price)
 print("ATM strike price :", ATM)
@@ -934,8 +928,11 @@ pe_state = init_state()
 
 combined_pnl = 0
 
-ce_state["marked"] = get_first_candle_mark_rest(str(CE_ID))
-pe_state["marked"] = get_first_candle_mark_rest(str(PE_ID))
+ce_state["marked"] = get_first_candle_mark_rest(CE_TOKEN,access_token)
+pe_state["marked"] = get_first_candle_mark_rest(PE_TOKEN,access_token)
+
+print("CE 15:30 candle close", ce_state["marked"])
+print("PE 15:30 candle close", pe_state["marked"])
 
 ce_buffer = ce_state["marked"] + 8
 pe_buffer = pe_state["marked"] + 8
