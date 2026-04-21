@@ -497,8 +497,6 @@ PE_CLOSE = get_first_candle_mark_rest(PE_TOKEN,access_token)
 print("CE 15:30 candle close", CE_CLOSE)
 print("PE 15:30 candle close", PE_CLOSE)
 
-ce_buffer = CE_CLOSE + 8
-pe_buffer = PE_CLOSE + 8
 
 # =========================
 # GLOBAL STATE
@@ -543,214 +541,423 @@ telemetry = {
     "pe_pnl": 0.0
 }
 
-# =========================
-# HANDLE LEG
-# =========================
+def on_message(msg):
 
-def handle_leg(token, candle, state, buffer, base, ltp, name):
+    global combined_pnl , current_lot
 
-    global realized_pnl, restricted_mode, target_hit
-
-    if target_hit:
+    if msg.get("type") != "Quote Data":
         return
 
-    o,h,l,c = candle["open"],candle["high"],candle["low"],candle["close"]
-    avg = (o+h+l+c)/4
+    token = str(msg["security_id"])
+    ltp = float(msg.get("LTP", 0)or 0)
+
+    builder = builders.get(token)
+
+    if not builder:
+        return
+
+    candle = builder.process_tick(msg)
+
+    token = str(msg["security_id"])
+
+    # store LTP
+    if token == CE_ID:
+        telemetry["ce_ltp"] = float(ltp or 0)
+
+    if token == PE_ID:
+        telemetry["pe_ltp"] = float(ltp or 0)
 
     # =========================
-    # TELEMETRY LTP
+    # Entry +8 Breakout
     # =========================
-    if name == "CE":
-        telemetry["ce_ltp"] = ltp
+
+    if token == CE_ID:
+        state = ce_state
+        leg_name = "CE"
+    elif token == PE_ID:
+        state = pe_state
+        leg_name = "PE"
     else:
-        telemetry["pe_ltp"] = ltp
+        state = None
 
-    # =========================
-    # ENTRY LOGIC
-    # =========================
-
-    if not state["active"]:
-
-        if restricted_mode:
-
-            if realized_pnl > -25:
-                return
-
-            if c < buffer:
-                state["buffer_reset"] = True
-                return
-
-            if not state["buffer_reset"]:
-                return
-
-            if c > buffer and avg > buffer and avg < c:
-                state["pending_entry"] = True
-                state["buffer_reset"] = False
-
-        else:
-            if c > buffer and avg > buffer and avg < c:
-                state["pending_entry"] = True
-
-    # =========================
-    # ENTRY EXECUTION
-    # =========================
-
-    if state["pending_entry"] and not state["active"]:
-
-        state["active"] = True
-        state["entry"] = ltp
-        state["pending_entry"] = False
-        state["tsl_active"] = False
-        state["tsl"] = None
-        state["last_price"] = ltp
-
-        print(f"🚀 ENTRY {name} @ {ltp}")
-
-        log_trade_event("ENTRY", name, token, SYMBOL, "BUY", 1, ltp, "BREAKOUT", 0, realized_pnl)
-
-        telemetry["status"] = "RUNNING"
+    if state and state["marked"] is None:
         return
 
     # =========================
-    # POSITION MANAGEMENT
+    # -8 EXIT (TICK LEVEL)
     # =========================
+    if state and state["position"]:
 
-    if state["active"]:
+        # =========================
+        # TSL ACTIVATION (TICK)
+        # =========================
+        # TSL ACTIVATE
+        if not state.get("tsl_active") and ltp >= state["entry_price"] + 15:
+            state["tsl_active"] = True
+            state["tsl"] = state["entry_price"] + 15
+            state["sl"] = state["entry_price"] + 10
 
-        state["last_price"] = ltp
-
-        pnl = ltp - state["entry"]
-
-        if name == "CE":
-            telemetry["ce_pnl"] = pnl
-        else:
-            telemetry["pe_pnl"] = pnl
-
-
-        if ltp <= base:
-            realized_pnl += pnl
-
-            print(f"❌ SL EXIT {name} @ {ltp}")
-
-            log_trade_event(
-                "EXIT", 
-                name, 
-                token, 
-                SYMBOL, 
-                "SELL", 
-                1, ltp, 
-                "SL", 
-                pnl, 
-                realized_pnl
-                )
-
-            state["active"] = False
-            return
-
-        # 🔥 TSL
-        if not state["tsl_active"]:
-            if ltp >= state["entry"] + 15:
-                state["tsl_active"] = True
-                state["tsl"] = state["entry"] + 15
-                state["sl"] = state["entry"] + 10
-
-        if state["tsl_active"]:
+        # TSL TRAIL
+        if state.get("tsl_active"):
 
             if ltp >= state["tsl"] + 10:
                 state["tsl"] += 10
                 state["sl"] += 10
 
             if ltp <= state["sl"]:
-                realized_pnl += pnl
 
-                print(f"❌ TSL EXIT {name} @ {ltp}")
+                pnl = (ltp - state["entry_price"]) * LOTSIZE * current_lot
+                state["pnl"] += pnl
+                combined_pnl += pnl
 
-                log_trade_event("EXIT", name, token, SYMBOL, "SELL", 1, ltp, "TSL", pnl, realized_pnl)
+                print("🔴 TSL EXIT MCX", leg_name, ltp)
 
-                state["active"] = False
-                state["buffer_reset"] = True
+                log_trade_event(
+                    event_type="EXIT",
+                    leg_name=leg_name,
+                    token=token,
+                    symbol=SYMBOL,
+                    side="SELL",
+                    lot=current_lot,
+                    price=ltp,
+                    reason="MCX TSL EXIT",
+                    pnl=state["pnl"],
+                    cum_pnl=combined_pnl
+                )
+
+                state["position"] = False
+                state["rearm_required"] = True
                 return
 
+    # =========================
+    # RUN UNIVERSAL EXIT (TICK LEVEL)
+    # =========================
+    if "ce_ltp" in telemetry and "pe_ltp" in telemetry:
+        universal_exit_check(telemetry["ce_ltp"], telemetry["pe_ltp"])
 
-# =========================
-# UNIVERSAL EXIT
-# =========================
-
-def universal_exit_check():
-
-    global realized_pnl, restricted_mode, target_hit
-
-    ce_run = (ce_state["last_price"] - ce_state["entry"]) if ce_state["active"] and ce_state["last_price"] else 0
-    pe_run = (pe_state["last_price"] - pe_state["entry"]) if pe_state["active"] and pe_state["last_price"] else 0
-
-    combined = realized_pnl + ce_run + pe_run
-
-    telemetry["pnl"] = combined
-
-    if combined <= -25:
-        restricted_mode = True
-        telemetry["status"] = "CLOSED"
-        print("⚠ RESTRICTED MODE")
-
-        ce_state["active"] = False
-        pe_state["active"] = False
-
-    if combined >= 50:
-        target_hit = True
-        telemetry["status"] = "CLOSED"
-        print("🎯 TARGET HIT")
-
-        ce_state["active"] = False
-        pe_state["active"] = False
-
-
-# =========================
-# WS HANDLER
-# =========================
-
-def on_tick(msg):
-
-    if msg["type"] != 'Quote Data':
-        return
-
-    token = str(msg["security_id"])
-    ltp = msg.get("LTP")
-
-    if not ltp:
-        return
-
-    ltp = float(ltp)
-
-    builder = builders.get(token)
-    if not builder:
-        return
-
-    candle = builder.process_tick(msg)
-
+    # =========================
+    # CANDLE LOGIC
+    # =========================
     if candle:
 
-        if token == CE_TOKEN:
-            handle_leg(token, candle, ce_state, ce_buffer, CE_CLOSE, ltp, "CE")
+        if token == CE_ID:
+            print("CE",token)
+            print(candle)
+            handle_leg("CE", token, candle, ce_state, ltp)
 
-        elif token == PE_TOKEN:
-            handle_leg(token, candle, pe_state, pe_buffer, PE_CLOSE, ltp, "PE")
+        if token == PE_ID:
+            print("PE",token)
+            print(candle)
+            handle_leg("PE", token, candle, pe_state, ltp)
 
-    universal_exit_check()
+    # =========================
+    # TELEMETRY (REAL-TIME PnL)
+    # =========================
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * current_lot
+
+    if pe_state["position"]:
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * current_lot
+
+    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
+    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
+    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
 
 
-instruments=[
-    (marketfeed.MCX,CE_TOKEN,marketfeed.Quote),
-    (marketfeed.MCX,PE_TOKEN,marketfeed.Quote)
-]
+def handle_leg(name, token, candle, state, ltp):
 
-feed=marketfeed.DhanFeed(client_id,access_token,instruments,"v2")
+    global combined_pnl , current_lot
 
+    now = datetime.now(IST).time()
+
+    close = candle["close"]
+    avg = (candle["open"] + candle["high"] +
+           candle["low"] + candle["close"]) / 4
+    buffer = state["marked"] + 8
+
+    timestamp = candle["timestamp"]
+
+    # =========================
+    # TIME EXIT (15:20)
+    # =========================
+    if now >= TRADE_END:
+
+        if state["position"]:
+            exit_price = ltp 
+
+            pnl = (exit_price - state["entry_price"]) * LOTSIZE * current_lot
+
+            state["pnl"] += pnl
+            combined_pnl += pnl
+            
+
+            #run_async(emit_signal(build_payload(name, "SELL", token, "exit", "EXIT", ltp, state["pnl"], combined_pnl)))
+            log_trade_event(
+                event_type="EXIT",
+                leg_name=name,
+                token=token,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=current_lot,
+                price=exit_price,
+                reason="TIME EXIT",
+                pnl= state["pnl"],
+                cum_pnl=combined_pnl
+                )
+
+            state["position"] = False
+
+
+        state["trading_disabled"] = True
+        return
+
+    # =========================
+    # STOP TRADING
+    # =========================
+    if state["trading_disabled"]:
+        return
+
+    if state["rearm_required"]:
+        if close < state["marked"]:
+            state["rearm_required"] = False
+        else:
+            return
+
+
+    if restricted_mode:
+
+        if combined_pnl > -25:
+            return
+
+        if close < buffer:
+            state["buffer_reset"] = True
+            return
+
+        if not state.get("buffer_reset"):
+            return
+
+    if target_hit:
+            return
+
+    # =============================
+    # ENTRY SIGNAL AND EXECUTION
+    # =============================
+    if not state["position"]:
+
+        if close > state["marked"] and avg > state["marked"] and avg < close:
+        
+
+            entry_price = ltp   
+
+            state["entry_price"] = entry_price
+            state["entry_time"] = datetime.now(IST).isoformat()
+
+            state["position"] = True
+            state["tsl_active"] = False
+            state["tsl"] = None
+            state["sl"] = None
+
+            print("🟢 BUY", name, entry_price)
+            #run_async(emit_signal(build_payload(name, "BUY", token, "entry", "ENTRY", ltp, state["pnl"], combined_pnl)))
+
+            log_trade_event(
+                event_type="ENTRY",
+                leg_name=name,
+                token=token,
+                symbol=SYMBOL,
+                side="BUY",
+                lot=current_lot,
+                price=entry_price,
+                reason="Trade opened",
+                pnl= state["pnl"],
+                cum_pnl= combined_pnl
+                )
+
+            log_event(f"{name} BUY", token, "ENTRY_EXECUTED", entry_price, "Trade opened")
+
+        if not state["position"] and close > buffer+8:
+        
+
+            entry_price = ltp   
+
+            state["entry_price"] = entry_price
+            state["entry_time"] = datetime.now(IST).isoformat()
+
+            state["position"] = True
+            state["tsl_active"] = False
+            state["tsl"] = None
+            state["sl"] = None
+
+            print("🟢 BUY", name, entry_price)
+            #run_async(emit_signal(build_payload(name, "BUY", token, "entry", "ENTRY", ltp, state["pnl"], combined_pnl)))
+
+            log_trade_event(
+                event_type="ENTRY",
+                leg_name=name,
+                token=token,
+                symbol="CRUDEOIL",
+                side="BUY",
+                lot=current_lot,
+                price=entry_price,
+                reason="Trade opened",
+                pnl= state["pnl"],
+                cum_pnl= combined_pnl
+                )
+
+            log_event(f"{name} BUY", token, "ENTRY_EXECUTED", entry_price, "Trade opened")           
+
+
+def universal_exit_check(ce_ltp, pe_ltp):
+
+    global combined_pnl, target_hit, restricted_mode
+
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * current_lot
+
+    if pe_state["position"]:
+        pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * current_lot
+
+    total = ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running
+
+    # LOSS CONTROL
+    if total <= -25:
+        restricted_mode = True
+        print("⚠ MCX RESTRICTED MODE")
+
+    # TARGET EXIT
+    if total >= 50:
+
+        target_hit = True
+
+        print("🎯 MCX TARGET HIT — EXIT ALL")
+
+        if ce_state["position"]:
+            pnl = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * current_lot
+            ce_state["pnl"] += pnl
+            combined_pnl += pnl
+            ce_state["position"] = False
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="CE",
+                token=CE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=current_lot,
+                price=ce_ltp,
+                reason="MCX TARGET EXIT",
+                pnl=ce_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+        if pe_state["position"]:
+            pnl = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * current_lot
+            pe_state["pnl"] += pnl
+            combined_pnl += pnl
+            pe_state["position"] = False
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="PE",
+                token=PE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=current_lot,
+                price=pe_ltp,
+                reason="MCX TARGET EXIT",
+                pnl=pe_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+
+
+
+
+
+today = datetime.now(IST).strftime("%Y-%m-%d")
+
+wait_for_start()
+
+ATM = calculate_atm(marked_price)
+print("ATM strike price :", ATM)
+
+ce_row = find_option_security(fno_df, ATM, "CE", today, "CRUDEOIL")
+pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
+
+CE_ID = str(ce_row["SECURITY_ID"])
+PE_ID = str(pe_row["SECURITY_ID"])   # <-- FIXED
+
+
+print("security ids")
+print(CE_ID, PE_ID)
+
+
+
+builders = {
+    CE_ID: OneMinuteCandleBuilder(),
+    PE_ID: OneMinuteCandleBuilder()
+        }
+
+# Log CE leg
+logtradeleg(
+    COMMON_ID,
+    "CE",
+    f"CRUDEOIL CE {ATM}",
+    ATM,
+    str(today),
+    CE_TOKEN
+)
+
+
+logtradeleg(
+    COMMON_ID,
+    "PE",
+    f"CRUDEOIL PE {ATM}",
+    ATM,
+    str(today),
+    PE_TOKEN
+)
+
+    
+# =========================
+# STATE
+# =========================
+
+ce_state = init_state()
+pe_state = init_state()
+
+combined_pnl = 0
+
+ce_state["marked"] = get_first_candle_mark_rest(str(CE_ID))
+pe_state["marked"] = get_first_candle_mark_rest(str(PE_ID))
+
+ce_buffer = ce_state["marked"] + 8
+pe_buffer = pe_state["marked"] + 8
+
+
+instruments = [
+    (marketfeed.NSE_FNO, str(CE_ID), marketfeed.Quote),
+    (marketfeed.NSE_FNO, str(PE_ID), marketfeed.Quote)
+    ]
+
+
+feed = marketfeed.DhanFeed(client_id, access_token, instruments, "v2")
+ 
 while True:
     try:
         feed.run_forever()
-        data=feed.get_data()
+        data = feed.get_data()
+
         if data:
-            on_tick(data)
+                
+            on_message(data)
+
     except Exception as e:
-        print("WS ERROR:",e)
+        print("WS ERROR:", e)
         feed.run_forever()
