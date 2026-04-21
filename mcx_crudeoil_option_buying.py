@@ -77,15 +77,6 @@ today = datetime.now(IST).strftime("%Y-%m-%d")
 
 dhan = dhanhq(client_id, access_token)
 
-
-
-
-# =========================
-# HELPERS
-# =========================
-
-
-
 def load_fno_master() -> pd.DataFrame:
     print("...downloading FNO master")
 
@@ -373,266 +364,15 @@ def init_state():
         "rearm_required": False
     }
 
-# =========================
-# START
-# =========================
 
+# =========================
+# START 
+# =========================
 wait_for_start()
 
 print("\n🚀 CRUDEOIL OPTION BUYING STARTED\n")
 
 threading.Thread(target=trade_log_worker, daemon=True).start()
-
-
-
-# =========================
-# STRATEGY ENGINE 
-# =========================
-
-class MCXCrudeOptionPaperEngine:
-
-    def __init__(self, ce_token, pe_token, ce_base, pe_base,fut_base):
-
-        self.ce_token = ce_token
-        self.pe_token = pe_token
-
-        self.ce_base = ce_base
-        self.pe_base = pe_base
-
-        self.ce_buffer = ce_base + 8
-        self.pe_buffer = pe_base + 8
-
-        self.state = {
-            ce_token: self._empty_leg(),
-            pe_token: self._empty_leg()
-        }
-
-        self.realized_pnl = 0
-        self.target_hit = False
-        self.restricted_mode = False
-        self.fut_base = fut_base
-
-        print("---- ENGINE INITIALIZED ----")
-        print("CE BUFFER:", self.ce_buffer)
-        print("PE BUFFER:", self.pe_buffer)
-
-    def _empty_leg(self):
-        return {
-            "active": False,
-            "entry": None,
-            "tsl_active": False,
-            "tsl": None,
-            "buffer_reset": False,
-            "last_price": None,
-            "pending_entry": False,
-            "rearm_required": False,
-            "sl": None,
-        }
-
-    def on_new_candle(self, token, time, candle):
-
-        print(candle , time , token)
-
-        if self.target_hit:
-            return
-
-        o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
-        avg = (o + h + l + c) / 4
-
-        leg = self.state[token]
-        base = self.ce_base if token == self.ce_token else self.pe_base
-        buffer = self.ce_buffer if token == self.ce_token else self.pe_buffer
-
-       
-        if self.restricted_mode:
-
-            if self.realized_pnl > -25:
-                return
-
-            if c < buffer:
-                leg["buffer_reset"] = True
-                return
-
-            if not leg["buffer_reset"]:
-                return
-
-            if self._breakout_condition(c, avg, buffer):
-                leg["pending_entry"] = True
-                leg["buffer_reset"] = False
-        else:
-            if self._breakout_condition(c, avg, buffer):
-                    leg["pending_entry"] = True
-                    
-
-    def _breakout_condition(self, close, avg, buffer):
-        return close > buffer and avg > buffer and avg < close
-
-    def _enter(self, token, price):
-        leg = self.state[token]
-        leg["active"] = True
-        leg["entry"] = price
-        leg["tsl_active"] = False
-        leg["tsl"] = None
-        leg["last_price"] = price
-        leg["pending_entry"] = False
-        name = "CE" if token == self.ce_token else "PE"
-        print(f"🚀 ENTRY {token} @ {price}")
-
-        telemetry["status"] = "RUNNING"
-
-        log_trade_event(
-            event_type="ENTRY",
-            leg_name=name,
-            token=token,
-            symbol=SYMBOL,
-            side="BUY",
-            lot=1,
-            price=price,
-            reason="BREAKOUT",
-            pnl=0,
-            cum_pnl=self.realized_pnl
-            )
-
-    def on_tick(self, token, price):
-
-        if token == self.ce_token:
-            telemetry["ce_ltp"] = price
-        else:
-            telemetry["pe_ltp"] = price
-
-
-        if self.target_hit:
-            return
-
-        leg = self.state[token]
-
-        if not leg["active"]:
-
-            if leg["pending_entry"] and not leg["active"]:
-                print(f"⚡ ENTRY {token} @ {price}")
-                self._enter(token, price)
-                leg["pending_entry"] = False
-                return
-            return
-
-        leg["last_price"] = price
-
-        entry = leg["entry"]
-        pnl = price - entry
-
-        ce_pnl = 0
-        pe_pnl = 0
-
-        for t, leg in self.state.items():
-            if leg["active"]:
-                current_price = leg["last_price"] or leg["entry"]
-                pnl = current_price - leg["entry"]
-
-                if t == self.ce_token:
-                    ce_pnl = pnl
-                else:
-                    pe_pnl = pnl
-
-        telemetry["ce_pnl"] = ce_pnl
-        telemetry["pe_pnl"] = pe_pnl
-
-        combined = self.realized_pnl + ce_pnl + pe_pnl
-        telemetry["pnl"] = combined
-
-        base = self.ce_base if token == self.ce_token else self.pe_base
-
-
-        # 🔥 HARD SL (tick-based)
-        if price <= base:
-            print(f"❌ SL EXIT {token} @ {price}")
-            self._exit(token, price)
-            return
-
-        if not leg["tsl_active"]:
-            if price >= leg["entry"] + 15:
-                leg["tsl_active"] = True
-                leg["tsl"] = leg["entry"] + 15
-                leg["sl"] = leg["entry"] + 10
-                print(f"🔁 TSL ACTIVATED @ TSL={leg['tsl']} SL={leg['sl']}")
-
-        if leg["tsl_active"]:
-
-            # Step move
-            if price >= leg["tsl"] + 10:
-                leg["tsl"] += 10
-                leg["sl"]  += 10
-
-                print(f"🔼 TSL STEP MOVE → TSL={leg['tsl']} SL={leg['sl']}")
-
-            # Exit condition
-            if price <= leg["sl"]:
-                print(f"❌ SL EXIT {token} @ {price}")
-                leg["rearm_required"] = True
-                self._exit(token, price)
-                return
-        self._check_global_target()
-
-    def _exit(self, token, price):
-
-        leg = self.state[token]
-        pnl = price - leg["entry"]
-        self.realized_pnl += pnl
-
-        name = "CE" if token == self.ce_token else "PE"
-
-        print(f"🏁 EXIT {token} @ {price} | PnL: {pnl}")
-        print(f"📊 CUMULATIVE PnL: {self.realized_pnl}")
-        telemetry["pnl"] = self.realized_pnl
-
-        log_trade_event(
-            event_type="EXIT",
-            leg_name=name,
-            token=token,
-            symbol=SYMBOL,
-            side="SELL",
-            lot=1,
-            price=price,
-            reason="EXIT",   # we improve this below 👇
-            pnl=pnl,
-            cum_pnl=self.realized_pnl
-        )
-
-        self.state[token] = self._empty_leg()
-
-    def _check_global_target(self):
-
-        unrealized = 0
-
-        for t, leg in self.state.items():
-            if leg["active"]:
-                current_price = leg["last_price"] if leg["last_price"] else leg["entry"]
-                unrealized += current_price - leg["entry"]
-
-        combined = self.realized_pnl + unrealized
-
-        if combined <= -25:
-            self.restricted_mode = True
-            print("⚠ RESTRICTED MODE ENABLED (COMBINED LOSS)")
-            telemetry["status"] = "CLOSED"
-            self._exit_all()
-            
-
-        if combined >= 50:
-            print("🎯 TARGET HIT 50 POINTS")
-            telemetry["status"] = "CLOSED"
-            self._exit_all()
-
-    def _exit_all(self):
-
-        for token, leg in self.state.items():
-            if leg["active"]:
-                price = leg["last_price"] if leg["last_price"] else leg["entry"]
-                self._exit(token, price)
-
-        self.target_hit = True
-        print("🛑 TRADING DISABLED FOR DAY")
-        telemetry["status"] = "CLOSED"
-
 
 # =========================
 # MAIN
@@ -687,8 +427,6 @@ def find_option_security(df , strike , option_type, today, target_symbol):
         
 
     return opt.sort_values("SM_EXPIRY_DATE").iloc[0]
-
-#fno_df = load_fno_master()
 
 fno_df = load_fno_master()
 #print(fno_df.iloc[0])
@@ -759,19 +497,216 @@ PE_CLOSE = get_first_candle_mark_rest(PE_TOKEN,access_token)
 print("CE 15:30 candle close", CE_CLOSE)
 print("PE 15:30 candle close", PE_CLOSE)
 
+ce_buffer = CE_CLOSE + 8
+pe_buffer = PE_CLOSE + 8
 
-engine = MCXCrudeOptionPaperEngine(
-    CE_TOKEN,
-    PE_TOKEN,
-    CE_CLOSE,
-    PE_CLOSE,
-    fut_base=candle_315["close"]
-)
+# =========================
+# GLOBAL STATE
+# =========================
+
+ce_state = {
+    "active": False,
+    "entry": None,
+    "tsl_active": False,
+    "tsl": None,
+    "sl": None,
+    "buffer_reset": False,
+    "pending_entry": False,
+    "last_price": None
+}
+
+pe_state = {
+    "active": False,
+    "entry": None,
+    "tsl_active": False,
+    "tsl": None,
+    "sl": None,
+    "buffer_reset": False,
+    "pending_entry": False,
+    "last_price": None
+}
+
+realized_pnl = 0
+restricted_mode = False
+target_hit = False
+
+# =========================
+# TELEMETRY
+# =========================
+
+telemetry = {
+    "status": "ACTIVE",
+    "pnl": 0.0,
+    "ce_ltp": 0.0,
+    "pe_ltp": 0.0,
+    "ce_pnl": 0.0,
+    "pe_pnl": 0.0
+}
+
+# =========================
+# HANDLE LEG
+# =========================
+
+def handle_leg(token, candle, state, buffer, base, ltp, name):
+
+    global realized_pnl, restricted_mode, target_hit
+
+    if target_hit:
+        return
+
+    o,h,l,c = candle["open"],candle["high"],candle["low"],candle["close"]
+    avg = (o+h+l+c)/4
+
+    # =========================
+    # TELEMETRY LTP
+    # =========================
+    if name == "CE":
+        telemetry["ce_ltp"] = ltp
+    else:
+        telemetry["pe_ltp"] = ltp
+
+    # =========================
+    # ENTRY LOGIC
+    # =========================
+
+    if not state["active"]:
+
+        if restricted_mode:
+
+            if realized_pnl > -25:
+                return
+
+            if c < buffer:
+                state["buffer_reset"] = True
+                return
+
+            if not state["buffer_reset"]:
+                return
+
+            if c > buffer and avg > buffer and avg < c:
+                state["pending_entry"] = True
+                state["buffer_reset"] = False
+
+        else:
+            if c > buffer and avg > buffer and avg < c:
+                state["pending_entry"] = True
+
+    # =========================
+    # ENTRY EXECUTION
+    # =========================
+
+    if state["pending_entry"] and not state["active"]:
+
+        state["active"] = True
+        state["entry"] = ltp
+        state["pending_entry"] = False
+        state["tsl_active"] = False
+        state["tsl"] = None
+        state["last_price"] = ltp
+
+        print(f"🚀 ENTRY {name} @ {ltp}")
+
+        log_trade_event("ENTRY", name, token, SYMBOL, "BUY", 1, ltp, "BREAKOUT", 0, realized_pnl)
+
+        telemetry["status"] = "RUNNING"
+        return
+
+    # =========================
+    # POSITION MANAGEMENT
+    # =========================
+
+    if state["active"]:
+
+        state["last_price"] = ltp
+
+        pnl = ltp - state["entry"]
+
+        if name == "CE":
+            telemetry["ce_pnl"] = pnl
+        else:
+            telemetry["pe_pnl"] = pnl
 
 
-def on_candle(token, candle):
-    engine.on_new_candle(token, candle["timestamp"], candle)
+        if ltp <= base:
+            realized_pnl += pnl
 
+            print(f"❌ SL EXIT {name} @ {ltp}")
+
+            log_trade_event(
+                "EXIT", 
+                name, 
+                token, 
+                SYMBOL, 
+                "SELL", 
+                1, ltp, 
+                "SL", 
+                pnl, 
+                realized_pnl
+                )
+
+            state["active"] = False
+            return
+
+        # 🔥 TSL
+        if not state["tsl_active"]:
+            if ltp >= state["entry"] + 15:
+                state["tsl_active"] = True
+                state["tsl"] = state["entry"] + 15
+                state["sl"] = state["entry"] + 10
+
+        if state["tsl_active"]:
+
+            if ltp >= state["tsl"] + 10:
+                state["tsl"] += 10
+                state["sl"] += 10
+
+            if ltp <= state["sl"]:
+                realized_pnl += pnl
+
+                print(f"❌ TSL EXIT {name} @ {ltp}")
+
+                log_trade_event("EXIT", name, token, SYMBOL, "SELL", 1, ltp, "TSL", pnl, realized_pnl)
+
+                state["active"] = False
+                state["buffer_reset"] = True
+                return
+
+
+# =========================
+# UNIVERSAL EXIT
+# =========================
+
+def universal_exit_check():
+
+    global realized_pnl, restricted_mode, target_hit
+
+    ce_run = (ce_state["last_price"] - ce_state["entry"]) if ce_state["active"] and ce_state["last_price"] else 0
+    pe_run = (pe_state["last_price"] - pe_state["entry"]) if pe_state["active"] and pe_state["last_price"] else 0
+
+    combined = realized_pnl + ce_run + pe_run
+
+    telemetry["pnl"] = combined
+
+    if combined <= -25:
+        restricted_mode = True
+        telemetry["status"] = "CLOSED"
+        print("⚠ RESTRICTED MODE")
+
+        ce_state["active"] = False
+        pe_state["active"] = False
+
+    if combined >= 50:
+        target_hit = True
+        telemetry["status"] = "CLOSED"
+        print("🎯 TARGET HIT")
+
+        ce_state["active"] = False
+        pe_state["active"] = False
+
+
+# =========================
+# WS HANDLER
+# =========================
 
 def on_tick(msg):
 
@@ -784,42 +719,38 @@ def on_tick(msg):
     if not ltp:
         return
 
-    ltp = float(ltp)  
+    ltp = float(ltp)
 
     builder = builders.get(token)
-
     if not builder:
         return
-    
-    engine.on_tick(token, ltp)
+
     candle = builder.process_tick(msg)
 
     if candle:
-        on_candle(token, candle)
+
+        if token == CE_TOKEN:
+            handle_leg(token, candle, ce_state, ce_buffer, CE_CLOSE, ltp, "CE")
+
+        elif token == PE_TOKEN:
+            handle_leg(token, candle, pe_state, pe_buffer, PE_CLOSE, ltp, "PE")
+
+    universal_exit_check()
 
 
-# ======================
-# START WS
-# ======================
-
-
-instruments = [
-    (marketfeed.MCX, CE_TOKEN , marketfeed.Quote),
-    (marketfeed.MCX, PE_TOKEN, marketfeed.Quote)
+instruments=[
+    (marketfeed.MCX,CE_TOKEN,marketfeed.Quote),
+    (marketfeed.MCX,PE_TOKEN,marketfeed.Quote)
 ]
 
-
-feed = marketfeed.DhanFeed(client_id,access_token,instruments,"v2")
-
+feed=marketfeed.DhanFeed(client_id,access_token,instruments,"v2")
 
 while True:
     try:
         feed.run_forever()
-        data = feed.get_data()
-
+        data=feed.get_data()
         if data:
             on_tick(data)
-
     except Exception as e:
-        print("WS ERROR:", e)
+        print("WS ERROR:",e)
         feed.run_forever()
