@@ -41,9 +41,6 @@ INTRADAY_URL = "https://api.dhan.co/v2/charts/intraday"
 
 
 
-
-
-
 STRATEGY_NAME = "MCX CRUDE OIL OPTION BUYING"
 
 client_id = os.getenv("CLIENT_ID")
@@ -860,7 +857,7 @@ ce_row = find_option_security(fno_df, ATM, "CE", today, "CRUDEOIL")
 pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
 
 CE_ID = str(ce_row["SECURITY_ID"])
-PE_ID = str(pe_row["SECURITY_ID"])   # <-- FIXED
+PE_ID = str(pe_row["SECURITY_ID"])   
 
 
 print("security ids")
