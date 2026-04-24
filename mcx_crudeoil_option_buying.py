@@ -264,8 +264,8 @@ def log_trade_event(
         "reason": reason,
         "deployed_by": COMMON_ID,
 
-        "pnl": str(pnl * 100),
-        "cum_pnl":str(cum_pnl *100)
+        "pnl": str(pnl),
+        "cum_pnl":str(cum_pnl)
     }
    
     trade_log_queue.put(payload)
@@ -515,7 +515,7 @@ telemetry = {
 
 def on_message(msg):
 
-    global combined_pnl , current_lot
+    global combined_pnl 
 
     if msg.get("type") != "Quote Data":
         return
@@ -578,7 +578,7 @@ def on_message(msg):
 
             if ltp <= state["sl"]:
 
-                pnl = (ltp - state["entry_price"]) * LOTSIZE * current_lot
+                pnl = (ltp - state["entry_price"]) * LOTSIZE * state["lot"]
                 state["pnl"] += pnl
                 combined_pnl += pnl
 
@@ -590,7 +590,7 @@ def on_message(msg):
                     token=token,
                     symbol=SYMBOL,
                     side="SELL",
-                    lot=current_lot,
+                    lot=state["lot"],
                     price=ltp,
                     reason="MCX TSL EXIT",
                     pnl=state["pnl"],
@@ -629,10 +629,10 @@ def on_message(msg):
     pe_running = 0
 
     if ce_state["position"]:
-        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * current_lot
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
 
     if pe_state["position"]:
-        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * current_lot
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
 
     telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
     telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
@@ -641,7 +641,7 @@ def on_message(msg):
 
 def handle_leg(name, token, candle, state, ltp):
 
-    global combined_pnl , current_lot
+    global combined_pnl
 
     now = datetime.now(IST).time()
 
@@ -660,7 +660,7 @@ def handle_leg(name, token, candle, state, ltp):
         if state["position"]:
             exit_price = ltp 
 
-            pnl = (exit_price - state["entry_price"]) * LOTSIZE * current_lot
+            pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
 
             state["pnl"] += pnl
             combined_pnl += pnl
@@ -673,7 +673,7 @@ def handle_leg(name, token, candle, state, ltp):
                 token=token,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=current_lot,
+                lot=state["lot"],
                 price=exit_price,
                 reason="TIME EXIT",
                 pnl= state["pnl"],
@@ -727,7 +727,7 @@ def handle_leg(name, token, candle, state, ltp):
                 token=token,
                 symbol=SYMBOL,
                 side="BUY",
-                lot=current_lot,
+                lot=state["lot"],
                 price=entry_price,
                 reason="Trade opened",
                 pnl= state["pnl"],
@@ -746,12 +746,15 @@ def universal_exit_check(ce_ltp, pe_ltp):
     pe_running = 0
 
     if ce_state["position"]:
-        ce_running = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * current_lot
+        ce_running = (ce_ltp - ce_state["entry_price"]) * LOTSIZE *ce_state["lot"]
 
     if pe_state["position"]:
-        pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * current_lot
+        pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
 
     total = ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running
+
+    if target_hit:
+        return
 
 
     # TARGET EXIT
@@ -762,7 +765,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
         print("🎯 MCX TARGET HIT — EXIT ALL")
 
         if ce_state["position"]:
-            pnl = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * current_lot
+            pnl = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
             ce_state["pnl"] += pnl
             combined_pnl += pnl
             ce_state["position"] = False
@@ -773,7 +776,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 token=CE_ID,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=current_lot,
+                lot=ce_state["lot"],
                 price=ce_ltp,
                 reason="MCX TARGET EXIT",
                 pnl=ce_state["pnl"],
@@ -781,7 +784,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
             )
 
         if pe_state["position"]:
-            pnl = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * current_lot
+            pnl = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
             pe_state["pnl"] += pnl
             combined_pnl += pnl
             pe_state["position"] = False
@@ -792,7 +795,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 token=PE_ID,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=current_lot,
+                lot=pe_state["lot"],
                 price=pe_ltp,
                 reason="MCX TARGET EXIT",
                 pnl=pe_state["pnl"],
@@ -805,7 +808,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
         print("OVERALL STOPLOSS HIT — EXIT ALL")
 
         if ce_state["position"]:
-            pnl = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * current_lot
+            pnl = (ce_ltp - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
             ce_state["pnl"] += pnl
             combined_pnl += pnl
             ce_state["position"] = False
@@ -816,7 +819,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 token=CE_ID,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=current_lot,
+                lot=ce_state["lot"],
                 price=ce_ltp,
                 reason="MCX TARGET EXIT",
                 pnl=ce_state["pnl"],
@@ -824,7 +827,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
             )
 
         if pe_state["position"]:
-            pnl = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * current_lot
+            pnl = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
             pe_state["pnl"] += pnl
             combined_pnl += pnl
             pe_state["position"] = False
@@ -835,7 +838,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 token=PE_ID,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=current_lot,
+                lot=pe_state["lot"],
                 price=pe_ltp,
                 reason="MCX TARGET EXIT",
                 pnl=pe_state["pnl"],
@@ -911,8 +914,8 @@ pe_state["buffer"] = pe_state["marked"] + 8
 
 
 instruments = [
-    (marketfeed.NSE_FNO, str(CE_ID), marketfeed.Quote),
-    (marketfeed.NSE_FNO, str(PE_ID), marketfeed.Quote)
+    (marketfeed.MCX, str(CE_ID), marketfeed.Quote),
+    (marketfeed.MCX, str(PE_ID), marketfeed.Quote)
     ]
 
 
