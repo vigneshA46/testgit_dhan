@@ -267,8 +267,8 @@ def log_trade_event(
         "reason": reason,
         "deployed_by": COMMON_ID,
 
-        "pnl": str(pnl * 100),
-        "cum_pnl":str(cum_pnl *100)
+        "pnl": str(pnl),
+        "cum_pnl":str(cum_pnl)
     }
    
     trade_log_queue.put(payload)
