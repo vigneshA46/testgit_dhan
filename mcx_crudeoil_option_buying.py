@@ -4,8 +4,8 @@ import requests
 from datetime import datetime, time as dtime
 from dotenv import load_dotenv
 import os
-from dhanhq import marketfeed
-from dhanhq import dhanhq
+from dhanhq import MarketFeed
+from dhanhq import dhanhq,DhanContext
 from dhan_token import get_access_token
 from candle_builder import OneMinuteCandleBuilder
 import threading
@@ -46,8 +46,10 @@ INTRADAY_URL = "https://api.dhan.co/v2/charts/intraday"
 
 STRATEGY_NAME = "MCX CRUDE OIL OPTION BUYING"
 
-client_id = os.getenv("CLIENT_ID")
+
 access_token = get_access_token()
+client_id = os.getenv("CLIENT_ID")
+
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -75,7 +77,8 @@ today = datetime.now(IST).strftime("%Y-%m-%d")
 # LOGIN
 # =========================
 
-dhan = dhanhq(client_id, access_token)
+dhan_context = DhanContext(client_id, access_token)
+dhan = dhanhq(dhan_context)
 
 def load_fno_master() -> pd.DataFrame:
     print("...downloading FNO master")
@@ -917,12 +920,12 @@ pe_state["buffer"] = pe_state["marked"] + 8
 
 
 instruments = [
-    (marketfeed.MCX, str(CE_ID), marketfeed.Quote),
-    (marketfeed.MCX, str(PE_ID), marketfeed.Quote)
+    (MarketFeed.MCX, str(CE_ID), MarketFeed.Quote),
+    (MarketFeed.MCX, str(PE_ID), MarketFeed.Quote)
     ]
 
 
-feed = marketfeed.DhanFeed(client_id, access_token, instruments, "v2")
+feed = MarketFeed(dhan_context, instruments, "v2")
  
 while True:
     try:
