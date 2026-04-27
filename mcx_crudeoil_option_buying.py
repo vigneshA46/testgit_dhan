@@ -663,6 +663,8 @@ def handle_leg(name, token, candle, state, ltp):
     # =========================
     if now >= TRADE_END:
 
+        telemetry["status"] = 'CLOSED'
+
         if state["position"]:
             exit_price = ltp 
 
@@ -756,6 +758,9 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
     if pe_state["position"]:
         pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+    if ce_state["position"] or pe_state["position"]:
+        telemetry["status"] = 'RUNNING'
 
     total = ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running
 
