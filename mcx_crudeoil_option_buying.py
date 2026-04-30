@@ -566,6 +566,31 @@ def on_message(msg):
     # =========================
     if state and state["position"]:
 
+        if ltp <= state["marked"]:
+
+            pnl = (ltp - state["entry_price"]) * LOTSIZE * state["lot"]
+            state["pnl"] += pnl
+            combined_pnl += pnl
+
+            print("🔴 TICK EXIT BELOW 3:15", leg_name, ltp)
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name=leg_name,
+                token=token,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=state["lot"],
+                price=ltp,
+                reason="TICK 3:15 EXIT",
+                pnl=state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            state["position"] = False
+            state["rearm_required"] = True
+            return    
+
         # =========================
         # TSL ACTIVATION (TICK)
         # =========================
@@ -606,6 +631,7 @@ def on_message(msg):
                 state["position"] = False
                 state["rearm_required"] = True
                 return
+            
 
     # =========================
     # RUN UNIVERSAL EXIT (TICK LEVEL)
@@ -654,7 +680,7 @@ def handle_leg(name, token, candle, state, ltp):
     close = candle["close"]
     avg = (candle["open"] + candle["high"] +
            candle["low"] + candle["close"]) / 4
-    buffer = state["marked"] + 8
+    state["buffer"] = state["marked"] + 8
 
     timestamp = candle["timestamp"]
 
@@ -701,7 +727,7 @@ def handle_leg(name, token, candle, state, ltp):
         return
 
     if state["rearm_required"]:
-        if close < state["marked"]:
+        if close < state["buffer"]:
             state["rearm_required"] = False
         else:
             return
