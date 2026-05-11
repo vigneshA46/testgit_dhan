@@ -4,8 +4,8 @@ import requests
 from datetime import datetime, time as dtime
 from dotenv import load_dotenv
 import os
-from dhanhq import marketfeed
-from dhanhq import dhanhq
+from dhanhq import MarketFeed
+from dhanhq import dhanhq,DhanContext
 from dhan_token import get_access_token
 from candle_builder import OneMinuteCandleBuilder
 import threading
@@ -43,8 +43,10 @@ INTRADAY_URL = "https://api.dhan.co/v2/charts/intraday"
 
 STRATEGY_NAME = "MCX CRUDE OIL OPTION BUYING"
 
-client_id = os.getenv("CLIENT_ID")
+
 access_token = get_access_token()
+client_id = os.getenv("CLIENT_ID")
+
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -72,7 +74,8 @@ today = datetime.now(IST).strftime("%Y-%m-%d")
 # LOGIN
 # =========================
 
-dhan = dhanhq(client_id, access_token)
+dhan_context = DhanContext(client_id, access_token)
+dhan = dhanhq(dhan_context)
 
 def load_fno_master() -> pd.DataFrame:
     print("...downloading FNO master")
@@ -560,6 +563,31 @@ def on_message(msg):
     # =========================
     if state and state["position"]:
 
+        if ltp <= state["marked"]:
+
+            pnl = (ltp - state["entry_price"]) * LOTSIZE * state["lot"]
+            state["pnl"] += pnl
+            combined_pnl += pnl
+
+            print("🔴 TICK EXIT BELOW 3:15", leg_name, ltp)
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name=leg_name,
+                token=token,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=state["lot"],
+                price=ltp,
+                reason="TICK 3:15 EXIT",
+                pnl=state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            state["position"] = False
+            state["rearm_required"] = True
+            return    
+
         # =========================
         # TSL ACTIVATION (TICK)
         # =========================
@@ -600,6 +628,7 @@ def on_message(msg):
                 state["position"] = False
                 state["rearm_required"] = True
                 return
+            
 
     # =========================
     # RUN UNIVERSAL EXIT (TICK LEVEL)
@@ -648,7 +677,7 @@ def handle_leg(name, token, candle, state, ltp):
     close = candle["close"]
     avg = (candle["open"] + candle["high"] +
            candle["low"] + candle["close"]) / 4
-    buffer = state["marked"] + 8
+    state["buffer"] = state["marked"] + 8
 
     timestamp = candle["timestamp"]
 
@@ -656,6 +685,8 @@ def handle_leg(name, token, candle, state, ltp):
     # TIME EXIT (15:20)
     # =========================
     if now >= TRADE_END:
+
+        telemetry["status"] = 'CLOSED'
 
         if state["position"]:
             exit_price = ltp 
@@ -693,7 +724,7 @@ def handle_leg(name, token, candle, state, ltp):
         return
 
     if state["rearm_required"]:
-        if close < state["marked"]:
+        if close < state["buffer"]:
             state["rearm_required"] = False
         else:
             return
@@ -750,6 +781,9 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
     if pe_state["position"]:
         pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+    if ce_state["position"] or pe_state["position"]:
+        telemetry["status"] = 'RUNNING'
 
     total = ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running
 
@@ -914,12 +948,12 @@ pe_state["buffer"] = pe_state["marked"] + 8
 
 
 instruments = [
-    (marketfeed.MCX, str(CE_ID), marketfeed.Quote),
-    (marketfeed.MCX, str(PE_ID), marketfeed.Quote)
+    (MarketFeed.MCX, str(CE_ID), MarketFeed.Quote),
+    (MarketFeed.MCX, str(PE_ID), MarketFeed.Quote)
     ]
 
 
-feed = marketfeed.DhanFeed(client_id, access_token, instruments, "v2")
+feed = MarketFeed(dhan_context, instruments, "v2")
  
 while True:
     try:
