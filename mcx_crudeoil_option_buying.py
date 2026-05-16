@@ -13,6 +13,9 @@ from dispatcher import subscribe
 from queue import Queue
 import pandas as pd
 from io import StringIO
+from signal_emitter import emit_signal
+import asyncio
+from find_instrument import FindInstrument
 
 # =========================
 # CONFIG
@@ -96,7 +99,106 @@ def load_fno_master() -> pd.DataFrame:
 
     return df
 
+strategy_id = "617126ad-4197-4272-a08f-cc2ad43b3858"
+loop = asyncio.new_event_loop()
 
+def start_loop():
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+threading.Thread(target=start_loop, daemon=True).start()
+
+def run_async(coro):
+    try:
+        if asyncio.iscoroutine(coro):
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        else:
+            print("❌ Not coroutine:", coro)
+    except Exception as e:
+        print("WS error: ", e)
+
+def get_today_deployments():
+    url = f"https://algoapi.dreamintraders.in/api/deployments/today/{strategy_id}"
+
+    try:
+        response = requests.get(url, timeout=10)
+
+        # Raise error if status not 200
+        response.raise_for_status()
+
+        data = response.json()
+
+        # 👉 store in variable (this is what you asked)
+        user_deployments = data
+
+        return user_deployments
+
+    except requests.exceptions.RequestException as e:
+        print("API Error:", e)
+        return None
+
+def group_users_by_broker(deployments):
+    grouped = {}
+
+    if not deployments:
+        return grouped
+
+    for d in deployments:
+
+        if d["type"] == "paper":
+            continue
+        broker = d.get("broker_name")
+
+        if not broker:
+            continue
+
+        if broker not in grouped:
+            grouped[broker] = []
+
+        grouped[broker].append(d)
+
+    return grouped
+
+
+def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,users):
+
+    if name == "CE":
+        row = AngelCE
+    else:
+        row = AngelPE
+
+    expiry_date = ce_row["SM_EXPIRY_DATE"]
+
+    day = expiry_date.strftime("%d")
+    month = expiry_date.strftime("%b").upper()
+    year = expiry_date.strftime("%y")
+
+    symbol = f"CRUDEOIL{day}{month}{year}{ATM}{name}"
+    expiry = expiry_date.strftime("%Y-%m-%d")
+
+    return {
+        "strategy_id": COMMON_ID,
+        "users": users,
+        "option": name,
+        "side": side,
+        "quantity": lot * LOTSIZE,
+        "security_id": token,
+        "token": int(row["token"]),
+        "event_type": event_type,
+        "leg_name": name,
+        "symbol": symbol,
+        "exchange": "MCX",
+        "expiry":expiry,
+        "strike": ATM,
+        "price":ltp,
+        "pnl":pnl,
+        "cum_pnl":cum_pnl,
+        "zebusymbol": "CRUDEOIL",
+        "is_ce": True if name == "CE" else False,
+        "is_fno": True,
+        "antsymbol": "CRUDEOIL",
+        "reason":reason
+    }
 
 
 
@@ -456,6 +558,12 @@ print("ATM strike price", ATM)
 ce_row = find_option_security(fno_df, ATM, "CE", today, "CRUDEOIL")
 pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
 
+
+finder = FindInstrument()
+
+AngelCE = finder.get_option("CRUDEOIL" , int(ATM) , "CE")
+AngelPE = finder.get_option("CRUDEOIL" , int(ATM) , "PE")
+
 CE_TOKEN = str(ce_row["SECURITY_ID"])
 PE_TOKEN = str(pe_row["SECURITY_ID"])
 
@@ -571,6 +679,28 @@ def on_message(msg):
 
             print("🔴 TICK EXIT BELOW 3:15", leg_name, ltp)
 
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        leg_name,
+                        "SELL",
+                        token,
+                        "tick exit",
+                        "EXIT",
+                        ltp,
+                        state["pnl"],
+                        combined_pnl,
+                        state["lot"],
+                        users
+                    )
+                )
+            )
+
             log_trade_event(
                 event_type="EXIT",
                 leg_name=leg_name,
@@ -611,6 +741,28 @@ def on_message(msg):
                 combined_pnl += pnl
 
                 print("🔴 TSL EXIT MCX", leg_name, ltp)
+
+                deployments = get_today_deployments()
+                users = group_users_by_broker(deployments)
+
+                print("FORMATTED USERS:", users)
+
+                run_async(
+                    emit_signal(
+                        build_payload(
+                            leg_name,
+                            "SELL",
+                            token,
+                            "tsl exit",
+                            "EXIT",
+                            ltp,
+                            state["pnl"],
+                            combined_pnl,
+                            state["lot"],
+                            users
+                        )
+                    )
+                )
 
                 log_trade_event(
                     event_type="EXIT",
@@ -698,6 +850,29 @@ def handle_leg(name, token, candle, state, ltp):
             
 
             #run_async(emit_signal(build_payload(name, "SELL", token, "exit", "EXIT", ltp, state["pnl"], combined_pnl)))
+            
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "time exit",
+                        "EXIT",
+                        ltp,
+                        state["pnl"],
+                        combined_pnl,
+                        state["lot"],
+                        users
+                    )
+                )
+            )
+
             log_trade_event(
                 event_type="EXIT",
                 leg_name=name,
@@ -751,7 +926,28 @@ def handle_leg(name, token, candle, state, ltp):
 
             print("🟢 BUY", name, entry_price)
             #run_async(emit_signal(build_payload(name, "BUY", token, "entry", "ENTRY", ltp, state["pnl"], combined_pnl)))
+            
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
 
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "BUY",
+                        token,
+                        "entry",
+                        "ENTRY",
+                        ltp,
+                        state["pnl"],
+                        combined_pnl,
+                        state["lot"],
+                        users
+                    )
+                )
+            )
             log_trade_event(
                 event_type="ENTRY",
                 leg_name=name,
@@ -804,6 +1000,28 @@ def universal_exit_check(ce_ltp, pe_ltp):
             combined_pnl += pnl
             ce_state["position"] = False
 
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "CE",
+                        "SELL",
+                        CE_ID,
+                        "target exit",
+                        "EXIT",
+                        ce_ltp,
+                        ce_state["pnl"],
+                        combined_pnl,
+                        ce_state["lot"],
+                        users
+                    )
+                )
+            )
+
             log_trade_event(
                 event_type="EXIT",
                 leg_name="CE",
@@ -822,6 +1040,28 @@ def universal_exit_check(ce_ltp, pe_ltp):
             pe_state["pnl"] += pnl
             combined_pnl += pnl
             pe_state["position"] = False
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "PE",
+                        "SELL",
+                        PE_ID,
+                        "target exit",
+                        "EXIT",
+                        pe_ltp,
+                        pe_state["pnl"],
+                        combined_pnl,
+                        pe_state["lot"],
+                        users
+                    )
+                )
+            )
 
             log_trade_event(
                 event_type="EXIT",
@@ -847,6 +1087,28 @@ def universal_exit_check(ce_ltp, pe_ltp):
             combined_pnl += pnl
             ce_state["position"] = False
 
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "CE",
+                        "SELL",
+                        CE_ID,
+                        "target exit",
+                        "EXIT",
+                        ce_ltp,
+                        ce_state["pnl"],
+                        combined_pnl,
+                        ce_state["lot"],
+                        users
+                    )
+                )
+            )
+
             log_trade_event(
                 event_type="EXIT",
                 leg_name="CE",
@@ -865,6 +1127,28 @@ def universal_exit_check(ce_ltp, pe_ltp):
             pe_state["pnl"] += pnl
             combined_pnl += pnl
             pe_state["position"] = False
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "PE",
+                        "SELL",
+                        PE_ID,
+                        "target exit",
+                        "EXIT",
+                        pe_ltp,
+                        pe_state["pnl"],
+                        combined_pnl,
+                        pe_state["lot"],
+                        users
+                    )
+                )
+            )
 
             log_trade_event(
                 event_type="EXIT",
