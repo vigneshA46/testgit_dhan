@@ -17,6 +17,7 @@ from signal_emitter import emit_signal
 import asyncio
 from find_instrument import FindInstrument
 
+
 # =========================
 # CONFIG
 # =========================
@@ -72,7 +73,7 @@ TRADE_END   = dtime(22, 30)
 LOTSIZE = 100
 
 today = datetime.now(IST).strftime("%Y-%m-%d")
-#today = "2026-04-01"
+#today = "2026-05-18"
 # =========================
 # LOGIN
 # =========================
@@ -561,8 +562,8 @@ pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
 
 finder = FindInstrument()
 
-AngelCE = finder.get_option("CRUDEOIL" , int(ATM) , "CE")
-AngelPE = finder.get_option("CRUDEOIL" , int(ATM) , "PE")
+AngelCE = finder.get_mcx_option("CRUDEOIL" , int(ATM) , "CE")
+AngelPE = finder.get_mcx_option("CRUDEOIL" , int(ATM) , "PE")
 
 CE_TOKEN = str(ce_row["SECURITY_ID"])
 PE_TOKEN = str(pe_row["SECURITY_ID"])
